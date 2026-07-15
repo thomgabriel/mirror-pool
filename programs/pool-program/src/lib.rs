@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+pub mod merkle;
 pub mod poseidon;
 
 // Overwritten by `anchor keys sync` in Step 4 with the generated keypair's pubkey.
