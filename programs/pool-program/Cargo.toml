@@ -23,6 +23,12 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.31.1"
+# Required directly (not just transitively via anchor-lang) because the safe
+# `#[account(zero_copy)]` codegen expands to a bare `#[derive(bytemuck::Pod)]` /
+# `#[derive(bytemuck::Zeroable)]` on `Pool` (see programs/pool-program/src/state.rs) —
+# `Pool` is ~3.9 KB and would blow the 4 KB SBF stack frame if Borsh-(de)serialized
+# by value like a normal `#[account]` struct.
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 # blake3 >=1.8.4 (pulled transitively via solana-blake3-hasher) needs digest 0.11,
 # which needs edition2024 — unsupported by the cargo-build-sbf toolchain bundled with
 # anchor-cli 0.31.1's platform-tools. Pin below that line.

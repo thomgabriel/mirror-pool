@@ -2135,6 +2135,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "blake3",
+ "bytemuck",
  "litesvm",
  "solana-poseidon",
  "solana-sdk",
