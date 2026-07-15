@@ -31,6 +31,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Guard against whole-Pool zero-copy copy
+        # `Pool` derives `Copy` (it's `bytemuck::Pod`), so a stray `*x.load()` / by-value
+        # `Pool` copy would silently reintroduce the ~4KB SBF-stack bug this branch avoids.
+        # Legitimate `AccountLoader` access (`ctx.accounts.pool.load_mut()?`) has no leading
+        # `*`, so it doesn't match; only a dereference of the loaded Ref/RefMut does.
+        run: |
+          if grep -rnE '\*[A-Za-z_][A-Za-z0-9_.]*\.load(_mut|_init)?\(\)' programs/pool-program/src/; then
+            echo "::error::whole-Pool copy via *x.load() — use field access through the Ref/RefMut"
+            exit 1
+          fi
 
   # ---------- 2. Host unit tests (pure crypto modules — no SBF needed) ----------
   # poseidon/merkle/roots have #[cfg(test)] host tests that run without a built .so.
