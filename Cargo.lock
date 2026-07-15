@@ -2136,6 +2136,7 @@ dependencies = [
  "anchor-lang",
  "blake3",
  "litesvm",
+ "solana-poseidon",
  "solana-sdk",
 ]
 

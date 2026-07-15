@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+pub mod poseidon;
+
 // Overwritten by `anchor keys sync` in Step 4 with the generated keypair's pubkey.
 declare_id!("7oHnDkpPbhPacDfqzF38caM3eo1Xo7cBmFugNXJurnn3");
 

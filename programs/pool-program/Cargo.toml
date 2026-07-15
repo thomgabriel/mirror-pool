@@ -22,11 +22,16 @@ no-entrypoint = []
 idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
-anchor-lang = "0.31.1"   # re-exports solana_program::poseidon (native syscall + host impl)
+anchor-lang = "0.31.1"
 # blake3 >=1.8.4 (pulled transitively via solana-blake3-hasher) needs digest 0.11,
 # which needs edition2024 — unsupported by the cargo-build-sbf toolchain bundled with
 # anchor-cli 0.31.1's platform-tools. Pin below that line.
 blake3 = "=1.8.3"
+# solana-program 2.2.1 (pulled in by anchor-lang 0.31.1) has no `poseidon` module —
+# Agave split it out into this standalone crate. It provides both the on-chain
+# `sol_poseidon` syscall (cfg(target_os = "solana")) and a host implementation
+# (ark-bn254 + light-poseidon) used by `cargo test`. Track solana-sdk's "~2.2" line.
+solana-poseidon = "~2.2"
 
 [dev-dependencies]
 litesvm = "=0.6.1"
