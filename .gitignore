@@ -1,0 +1,28 @@
+# Rust / Cargo
+/target
+**/*.rs.bk
+# Keep Cargo.lock committed (custody program — reproducible builds)
+
+# Anchor / Solana
+.anchor/
+test-ledger/
+**/*-keypair.json
+!**/*-keypair.example.json
+
+# Node (circuits tooling, later)
+node_modules/
+circuits/build/
+
+# ZK artifacts (large; test ptau is committed explicitly where needed)
+*.zkey
+*.r1cs
+*.wasm.map
+
+# SDD scratch (progress ledger is git-ignored working state)
+.superpowers/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
