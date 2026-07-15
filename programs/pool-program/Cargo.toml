@@ -1,0 +1,35 @@
+[package]
+name = "pool-program"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "pool_program"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"   # re-exports solana_program::poseidon (native syscall + host impl)
+# blake3 >=1.8.4 (pulled transitively via solana-blake3-hasher) needs digest 0.11,
+# which needs edition2024 — unsupported by the cargo-build-sbf toolchain bundled with
+# anchor-cli 0.31.1's platform-tools. Pin below that line.
+blake3 = "=1.8.3"
+
+[dev-dependencies]
+litesvm = "=0.6.1"
+solana-sdk = "~2.2"
+
+# anchor-lang's #[program]/#[derive(Accounts)] macros emit cfg(feature = "...") checks
+# for flags anchor-lang owns internally; declare them expected so rustc's check-cfg
+# lint doesn't flag them as unexpected in the consuming crate.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(feature, values("cpi", "default", "idl-build", "no-entrypoint", "anchor-debug", "custom-heap", "custom-panic", "no-idl", "no-log-ix-name"))',
+    'cfg(target_os, values("solana"))',
+]
