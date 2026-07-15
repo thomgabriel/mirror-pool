@@ -84,8 +84,11 @@ Each unit: **what it does · interface · dependencies.**
   verification via `alt_bn128`; dispatch to action adapters.
 - **Interface (instructions):** `initialize_pool`, `deposit`, `commit_intent`,
   `execute_round`, `withdraw`, `emergency_withdraw`.
-- **State (PDAs):** `["pool",mint]`, `["vault",mint]`, `["tree",mint]`,
-  `["nullifier",pool,hash]`, `["round",pool,round_id]`, `["member",pool,commitment]`.
+- **State (PDAs):** `["pool",mint]`, `["vault",pool]`, `["nullifier",pool,hash]`,
+  `["round",pool,round_id]`, `["member",pool,commitment]`. (Vault is keyed by `pool`,
+  which already encodes `mint`, so `deposit` needn't pass the mint account. In the SOL
+  foundations MVP the Merkle tree state is embedded in the `Pool` account — no separate
+  `["tree",pool]` account — and may be split out later if the tree outgrows `Pool`.)
 - **Depends on:** `groth16-solana`, `action-adapters` (CPI), Squads multisig.
 
 **`action-adapters` + `PooledAction`** — the extensibility seam.
