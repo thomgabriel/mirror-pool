@@ -1,16 +1,29 @@
+// `solana_sdk::transaction::TransactionError` is a deprecated re-export (the SDK points at
+// the standalone `solana-transaction-error` crate instead), but that crate isn't a direct
+// dependency of this test crate. Matching on `TransactionError`/`InstructionError` variants
+// below is the whole point of the negative-guard tests, so allow the deprecation warning
+// file-wide rather than pull in an extra dependency for a type alias.
+#![allow(deprecated)]
+
 mod common;
 use common::{cu_limit_ix, disc, program_id, so_path};
 use litesvm::LiteSVM;
 use pool_program::state::Pool;
 use solana_sdk::{
     account::ReadableAccount,
-    instruction::{AccountMeta, Instruction},
+    instruction::{AccountMeta, Instruction, InstructionError},
     message::Message,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
     system_program,
-    transaction::Transaction,
+    transaction::{Transaction, TransactionError},
 };
+
+/// Anchor custom program errors start at 6000, assigned in `PoolError` declaration order
+/// (see `programs/pool-program/src/lib.rs`): MerkleInit=6000, ZeroDeposit=6001,
+/// CommitmentNotInField=6002, TreeFull=6003. Confirmed against `target/idl/pool_program.json`.
+const ZERO_DEPOSIT_CODE: u32 = 6001;
+const COMMITMENT_NOT_IN_FIELD_CODE: u32 = 6002;
 
 const NEXT_INDEX_OFFSET: usize = 8 + core::mem::offset_of!(Pool, next_index);
 const CURRENT_ROOT_OFFSET: usize = 8 + core::mem::offset_of!(Pool, current_root);
@@ -116,9 +129,65 @@ fn deposit_rejects_zero_amount() {
     };
     let ix = deposit_ix(pool, vault, payer.pubkey(), commitment, 0);
     let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
+    let outcome = svm
+        .send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
+        .expect_err("zero deposit must fail");
+
+    // A bare `.is_err()` would also pass for an unrelated failure (bad accounts, missing
+    // signer, CU exhaustion...). Assert the specific guard fired: an `InstructionError`
+    // carrying the `ZeroDeposit` code, with the matching message in the program logs.
     assert!(
-        svm.send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
-            .is_err(),
-        "zero deposit must fail"
+        matches!(
+            outcome.err,
+            TransactionError::InstructionError(_, InstructionError::Custom(code))
+                if code == ZERO_DEPOSIT_CODE
+        ),
+        "expected InstructionError::Custom({ZERO_DEPOSIT_CODE}) (ZeroDeposit), got {:?} (logs: {:?})",
+        outcome.err,
+        outcome.meta.logs
+    );
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("greater than zero")),
+        "expected the ZeroDeposit error message in logs; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+#[test]
+fn deposit_rejects_out_of_field_commitment() {
+    let (mut svm, payer, pool, vault) = setup_pool();
+    // Larger than the BN254 scalar field modulus in every leading byte, so it fails the
+    // `is_in_field` range check regardless of the exact modulus value.
+    let commitment = [0xffu8; 32];
+    let ix = deposit_ix(pool, vault, payer.pubkey(), commitment, 1_000_000);
+    let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
+    let outcome = svm
+        .send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
+        .expect_err("out-of-field commitment must fail");
+
+    // Exercises the instruction-level `require!(is_in_field(...))` wiring, not just the
+    // pure-fn host test — same non-tautological assertion style as the zero-amount guard.
+    assert!(
+        matches!(
+            outcome.err,
+            TransactionError::InstructionError(_, InstructionError::Custom(code))
+                if code == COMMITMENT_NOT_IN_FIELD_CODE
+        ),
+        "expected InstructionError::Custom({COMMITMENT_NOT_IN_FIELD_CODE}) (CommitmentNotInField), got {:?} (logs: {:?})",
+        outcome.err,
+        outcome.meta.logs
+    );
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("not a valid field element")),
+        "expected the CommitmentNotInField error message in logs; logs: {:?}",
+        outcome.meta.logs
     );
 }

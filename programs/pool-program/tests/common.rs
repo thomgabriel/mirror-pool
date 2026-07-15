@@ -28,7 +28,7 @@ pub fn disc(name: &str) -> [u8; 8] {
     d
 }
 
-/// Headroom for the ~20 Poseidon syscalls + multi-KB Borsh (de)serialization.
+/// Headroom for zero-copy account access + ~20 Poseidon syscalls.
 pub fn cu_limit_ix() -> Instruction {
     ComputeBudgetInstruction::set_compute_unit_limit(400_000)
 }
