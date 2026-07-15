@@ -70,4 +70,14 @@ mod tests {
             Err(PoseidonError::NotInField)
         ));
     }
+
+    #[test]
+    fn rejects_field_modulus_exactly() {
+        // The modulus itself is NOT a valid field element (canonical range is < modulus).
+        assert!(!is_in_field(&BN254_MODULUS_BE));
+        assert!(matches!(
+            hash2(&BN254_MODULUS_BE, &[0u8; 32]),
+            Err(PoseidonError::NotInField)
+        ));
+    }
 }
