@@ -1,0 +1,77 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  ANCHOR_VERSION: "0.31.1"
+  # Local dev builds the SBF program with platform-tools v1.54 (pinned in
+  # programs/pool-program/Cargo.toml's [package.metadata.solana]); cargo-build-sbf
+  # fetches that toolchain automatically. See docs/research/cicd-and-testing.md.
+  SOLANA_VERSION: "2.2.21"
+
+jobs:
+  # ---------- 1. Lint / format (fast, host-only — reliable) ----------
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # ---------- 2. Host unit tests (pure crypto modules — no SBF needed) ----------
+  # poseidon/merkle/roots have #[cfg(test)] host tests that run without a built .so.
+  # This is the coverage-meaningful layer (see cicd-and-testing.md §3 SBF caveat).
+  unit:
+    name: host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p pool-program --lib --locked
+
+  # ---------- 3. Anchor build + LiteSVM integration tests ----------
+  # ⚠️ FIRST-RUN VALIDATION NEEDED: this job builds the SBF program (which fetches
+  # platform-tools v1.54 via the manifest pin) and runs the LiteSVM integration tests
+  # (which load the built .so). Local dev uses solana-cli 3.0.1; if setup-anchor's
+  # Agave/platform-tools resolution differs on a fresh runner, adjust SOLANA_VERSION or
+  # the setup step here after watching the first Actions run.
+  build-test:
+    name: anchor build + litesvm integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: metadaoproject/setup-anchor@v3.4
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-cli-version: ${{ env.SOLANA_VERSION }}
+          node-version: "20"
+      - uses: Swatinem/rust-cache@v2
+      - name: Anchor build (SBF)
+        run: anchor build
+      - name: Full test suite (unit + LiteSVM integration)
+        run: cargo test -p pool-program --locked
+
+  # ---------- 4. Security / supply chain ----------
+  supply-chain:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
