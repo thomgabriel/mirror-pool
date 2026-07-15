@@ -136,4 +136,18 @@ mod tests {
             Err(MerkleError::NotInField)
         ));
     }
+
+    #[test]
+    fn insert_into_full_tree_errors() {
+        // The TreeFull guard checks next_index before any hashing, so a full tree
+        // is reachable in O(1) without 2^20 real inserts.
+        let z = zeros().unwrap();
+        let mut next_index = 1u32 << TREE_HEIGHT;
+        let mut root = empty_root(&z).unwrap();
+        let mut filled = z;
+        assert!(matches!(
+            insert(&mut next_index, &mut root, &mut filled, [1u8; 32]),
+            Err(MerkleError::TreeFull)
+        ));
+    }
 }
