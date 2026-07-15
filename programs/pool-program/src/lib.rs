@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
 pub mod merkle;
+pub mod nullifier;
 pub mod poseidon;
 pub mod roots;
 pub mod state;
@@ -82,6 +83,15 @@ pub mod pool_program {
         });
         Ok(())
     }
+
+    // DEFERRED-GATING: standalone so the double-spend guard can be exercised in
+    // isolation; intentionally ungated (nullifiers are secret until reveal, so an
+    // attacker cannot pre-burn a victim's specific one). Before any deployment this
+    // MUST move inside `withdraw`, gated behind Groth16 proof verification.
+    pub fn mark_spent(ctx: Context<MarkSpent>, _nullifier_hash: [u8; 32]) -> Result<()> {
+        ctx.accounts.nullifier.spent = true;
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -128,6 +138,30 @@ pub struct Deposit<'info> {
         bump = pool.load()?.vault_bump
     )]
     pub vault: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(nullifier_hash: [u8; 32])]
+pub struct MarkSpent<'info> {
+    #[account(
+        seeds = [b"pool", pool.load()?.mint.as_ref()],
+        bump = pool.load()?.bump
+    )]
+    pub pool: AccountLoader<'info, Pool>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + 1,
+        seeds = [b"nullifier", pool.key().as_ref(), nullifier_hash.as_ref()],
+        bump
+    )]
+    pub nullifier: Account<'info, crate::nullifier::NullifierRecord>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
