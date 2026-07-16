@@ -1,0 +1,8 @@
+# Pin the whole workspace (local dev AND CI) to one Rust toolchain, so builds are
+# reproducible and `@stable` can't drift lints or drop symbols under us. 1.97+
+# removed the `__rust_probestack` compiler-builtin that wasmer (via ark-circom's
+# witness generator) still references, which broke the proof-based test link in CI;
+# 1.92.0 matches local dev and provides it. Bump deliberately, not by floating.
+[toolchain]
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]
