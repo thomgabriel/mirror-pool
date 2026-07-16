@@ -207,7 +207,9 @@ impl MerkleTree {
         })
     }
 
-    /// Append a commitment; returns its leaf index.
+    /// Append a commitment; returns its leaf index. `leaf` must be a canonical
+    /// in-field BN254 scalar (e.g. `Note::commitment()`); `root()` /
+    /// `authentication_path()` panic in `next_level` otherwise.
     pub fn insert(&mut self, leaf: [u8; 32]) -> usize {
         self.leaves.push(leaf);
         self.leaves.len() - 1
