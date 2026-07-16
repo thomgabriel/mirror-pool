@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
+pub mod invariants;
 pub mod merkle;
 pub mod nullifier;
 pub mod poseidon;
 pub mod roots;
+pub mod round;
 pub mod state;
 pub mod verifier;
 pub mod vk;
@@ -18,7 +20,16 @@ declare_id!("7oHnDkpPbhPacDfqzF38caM3eo1Xo7cBmFugNXJurnn3");
 pub mod pool_program {
     use super::*;
 
-    pub fn initialize_pool(ctx: Context<InitializePool>, denomination: u64) -> Result<()> {
+    pub fn initialize_pool(
+        ctx: Context<InitializePool>,
+        denomination: u64,
+        k_floor: u16,
+    ) -> Result<()> {
+        require!(
+            k_floor >= crate::round::MIN_K_FLOOR,
+            PoolError::KFloorTooLow
+        );
+
         let z = zeros().map_err(|_| error!(PoolError::MerkleInit))?;
         let root = empty_root(&z).map_err(|_| error!(PoolError::MerkleInit))?;
 
@@ -38,14 +49,22 @@ pub mod pool_program {
         // `load_init` hands back a `RefMut` directly over the account's own backing
         // bytes (no Borsh copy of the ~3.9 KB struct onto the stack); the `init`
         // constraint zero-fills the account, so only the non-zero fields are set.
-        let mut pool = ctx.accounts.pool.load_init()?;
-        pool.mint = ctx.accounts.mint.key();
-        pool.denomination = denomination;
-        pool.bump = ctx.bumps.pool;
-        pool.vault_bump = ctx.bumps.vault;
-        pool.filled_subtrees = z; // empty tree: filled subtrees == zeros
-        pool.current_root = root;
-        pool.roots[0] = root;
+        {
+            let mut pool = ctx.accounts.pool.load_init()?;
+            pool.mint = ctx.accounts.mint.key();
+            pool.denomination = denomination;
+            pool.k_floor = k_floor;
+            pool.current_round_id = 0;
+            pool.bump = ctx.bumps.pool;
+            pool.vault_bump = ctx.bumps.vault;
+            pool.filled_subtrees = z; // empty tree: filled subtrees == zeros
+            pool.current_root = root;
+            pool.roots[0] = root;
+        }
+
+        let round = &mut ctx.accounts.round;
+        round.state = crate::round::RoundState::Open;
+        round.intent_count = 0;
         Ok(())
     }
 
@@ -177,6 +196,15 @@ pub struct InitializePool<'info> {
     )]
     pub vault: UncheckedAccount<'info>,
 
+    #[account(
+        init,
+        payer = payer,
+        space = crate::round::Round::SPACE,
+        seeds = [b"round", pool.key().as_ref(), &0u64.to_le_bytes()],
+        bump
+    )]
+    pub round: Account<'info, crate::round::Round>,
+
     /// CHECK: mint is used only as a PDA seed / label in this plan (no SPL logic yet).
     pub mint: UncheckedAccount<'info>,
 
@@ -278,4 +306,6 @@ pub enum PoolError {
     UnknownRoot,
     #[msg("fee must not exceed the pool's denomination")]
     FeeExceedsDenomination,
+    #[msg("k_floor must be at least MIN_K_FLOOR")]
+    KFloorTooLow,
 }

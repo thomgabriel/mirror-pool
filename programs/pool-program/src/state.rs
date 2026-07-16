@@ -31,10 +31,13 @@ pub struct Pool {
     pub filled_subtrees: [[u8; 32]; TREE_HEIGHT],
     pub roots: [[u8; 32]; ROOT_HISTORY_SIZE],
     pub current_root_index: u32,
-    // Adding `denomination: u64` raised the struct's alignment to 8, so the
-    // compiler now rounds the total size up to a multiple of 8 — an implicit
-    // 4-byte trailing gap that `Pod`'s derive would otherwise reject. Name it.
-    _reserved2: [u8; 4],
+    // k-floor and the current open round id. `k_floor` (u16) sits right after
+    // the u32 (offset stays 2-aligned); an explicit 2-byte pad then 8-aligns
+    // `current_round_id` (u64). Every byte of padding is named so bytemuck's
+    // `Pod` derive — which rejects *implicit* padding — stays satisfied.
+    pub k_floor: u16,
+    _reserved2: [u8; 2],
+    pub current_round_id: u64,
 }
 
 // `Pod` (bytemuck) rejects implicit padding at compile time, but it can't catch a

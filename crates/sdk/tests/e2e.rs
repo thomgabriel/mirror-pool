@@ -170,9 +170,11 @@ fn setup_fixture() -> Fixture {
     let mint = Pubkey::new_unique();
     let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &pool_program::ID);
     let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &pool_program::ID);
+    let round = sdk::round_pda(pool, 0);
 
     // --- Step 1: initialize_pool(D) via the SDK builder.
-    let init_ix = build_initialize_pool_ix(pool, vault, mint, payer.pubkey(), DENOMINATION);
+    let init_ix =
+        build_initialize_pool_ix(pool, vault, round, mint, payer.pubkey(), DENOMINATION, 2);
     let msg = Message::new(
         &[
             ComputeBudgetInstruction::set_compute_unit_limit(400_000),

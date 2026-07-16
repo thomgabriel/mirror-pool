@@ -136,23 +136,36 @@ fn discriminator(name: &str) -> [u8; 8] {
 pub fn build_initialize_pool_ix(
     pool: Pubkey,
     vault: Pubkey,
+    round: Pubkey,
     mint: Pubkey,
     payer: Pubkey,
     denomination: u64,
+    k_floor: u16,
 ) -> Instruction {
     let mut data = discriminator("initialize_pool").to_vec();
     data.extend_from_slice(&denomination.to_le_bytes());
+    data.extend_from_slice(&k_floor.to_le_bytes());
     Instruction {
         program_id: pool_program::ID,
         accounts: vec![
             AccountMeta::new(pool, false),
             AccountMeta::new(vault, false),
+            AccountMeta::new(round, false),
             AccountMeta::new_readonly(mint, false),
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
         ],
         data,
     }
+}
+
+/// The PDA for a pool's round `round_id` (`["round", pool, round_id_le]`).
+pub fn round_pda(pool: Pubkey, round_id: u64) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &round_id.to_le_bytes()],
+        &pool_program::ID,
+    )
+    .0
 }
 
 /// Builds the `deposit` instruction. Account order/writability matches
@@ -453,17 +466,20 @@ mod tests {
     fn initialize_pool_ix_encodes_denomination() {
         let pool = Pubkey::new_unique();
         let vault = Pubkey::new_unique();
+        let round = Pubkey::new_unique();
         let mint = Pubkey::new_unique();
         let payer = Pubkey::new_unique();
         let denomination = 1_000_000u64;
+        let k_floor = 2u16;
 
-        let ix = build_initialize_pool_ix(pool, vault, mint, payer, denomination);
+        let ix = build_initialize_pool_ix(pool, vault, round, mint, payer, denomination, k_floor);
 
         assert_eq!(&ix.data[..8], &discriminator("initialize_pool"));
         assert_eq!(&ix.data[8..16], &denomination.to_le_bytes());
-        assert_eq!(ix.accounts.len(), 5);
-        assert_eq!(ix.accounts[3].pubkey, payer);
-        assert!(ix.accounts[3].is_signer);
+        assert_eq!(&ix.data[16..18], &k_floor.to_le_bytes());
+        assert_eq!(ix.accounts.len(), 6);
+        assert_eq!(ix.accounts[4].pubkey, payer);
+        assert!(ix.accounts[4].is_signer);
     }
 
     fn tf(n: u8) -> [u8; 32] {

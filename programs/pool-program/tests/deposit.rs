@@ -37,14 +37,20 @@ fn setup_pool(denomination: u64) -> (LiteSVM, Keypair, Pubkey, Pubkey) {
     let mint = Pubkey::new_unique();
     let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
     let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
 
     let mut data = disc("initialize_pool").to_vec();
     data.extend_from_slice(&denomination.to_le_bytes());
+    data.extend_from_slice(&2u16.to_le_bytes());
     let ix = Instruction {
         program_id: program_id(),
         accounts: vec![
             AccountMeta::new(pool, false),
             AccountMeta::new(vault, false),
+            AccountMeta::new(round, false),
             AccountMeta::new_readonly(mint, false),
             AccountMeta::new(payer.pubkey(), true),
             AccountMeta::new_readonly(system_program::ID, false),
