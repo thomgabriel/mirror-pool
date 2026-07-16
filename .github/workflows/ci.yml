@@ -84,12 +84,10 @@ jobs:
         run: cargo test -p pool-program --lib --test deposit --test initialize_pool --test scaffold --locked
 
   # ---------- 4. VK drift guard ----------
-  # ⚠️ FIRST-RUN VALIDATION NEEDED: regenerates circuits/build/verification_key.json
-  # via circuits/scripts/setup.sh (needs the circom compiler + snarkjs/node toolchain,
-  # and the pot14 ptau fetched below) then byte-compares the embedded on-chain VK
-  # (programs/pool-program/src/vk.rs) against what crates/vk-gen would generate from it.
-  # Watch the first Actions run in case the circom install / ptau fetch step needs
-  # adjusting for the runner.
+  # Regenerates circuits/build/verification_key.json via circuits/scripts/setup.sh
+  # (needs circom + snarkjs/node + the pot14 ptau fetched below), then byte-compares
+  # the embedded on-chain VK (programs/pool-program/src/vk.rs) against what
+  # crates/vk-gen would regenerate from it.
   check-vk:
     name: check-vk (verifier-key drift guard)
     runs-on: ubuntu-latest

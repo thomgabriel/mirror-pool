@@ -6,9 +6,6 @@ description: >
 runs:
   using: composite
   steps:
-    # ⚠️ FIRST-RUN VALIDATION NEEDED: unexercised on a real Actions runner yet —
-    # watch the first run in case the cache action or the download URL needs
-    # adjusting (e.g. storage.googleapis.com rate limits / mirror changes).
     - name: Cache pot14_final.ptau
       id: cache-ptau
       uses: actions/cache@v4

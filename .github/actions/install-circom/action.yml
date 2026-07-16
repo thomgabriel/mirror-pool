@@ -6,9 +6,6 @@ description: >
 runs:
   using: composite
   steps:
-    # ⚠️ FIRST-RUN VALIDATION NEEDED: watch the first Actions run in case this
-    # install step needs adjusting for the runner (matches check-vk's original
-    # inline step, now shared with the zk-tests job).
     - name: Cache circom binary
       id: cache-circom
       uses: actions/cache@v4

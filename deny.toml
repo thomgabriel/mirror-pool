@@ -41,7 +41,7 @@ allow = [
     "CC0-1.0",
     "0BSD",
     # Boost license (permissive; e.g. `ryu`) and the permissive Community Data
-    # License Agreement (transitive deps) — both surfaced on the first CI run.
+    # License Agreement — both from transitive dependencies.
     "BSL-1.0",
     "CDLA-Permissive-2.0",
 ]
