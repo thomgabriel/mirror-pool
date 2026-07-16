@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the single-user `withdraw` path with a k-anonymous **round** engine — many participants `commit_intent`, the pool executes them as one vault-signed batch (`execute_round`) that an on-chain **k-floor** refuses to fire below `k`, with a coordinator-independent `cancel_intent` escape hatch — so exiting the pool is only ever possible inside a crowd of ≥ k.
+**Goal:** Replace the single-user `withdraw` path with a k-anonymous **round** engine — many participants `commit_intent`, the pool executes them as one vault-signed batch (`execute_round`) that an on-chain **k-floor** refuses to fire below `k`. The **anonymous** exit is this batch and requires ≥ k committed notes. `cancel_intent` is a coordinator-independent **safety valve** by which a committed intent's own recipient can unilaterally reclaim its deposit — a single-note, non-batch exit (NOT k-anonymous) that exists so a censoring/offline coordinator, or a round that never fills, can never lock a participant's funds.
 
 **Architecture:** A `Round` PDA accumulates per-intent PDAs (`["intent", pool, nullifier_hash]`) until anyone calls `execute_round` with all ≥ k of them as `remaining_accounts`; the pool then pays every intent from its vault in a single signed transaction (the "uniform actor" property), enforcing `intent_count ≥ k_floor` on-chain. No circuit changes: the existing withdraw proof already binds `extDataHash(recipient, relayer, fee)`, so we verify it at **commit** time and store the intent instead of paying immediately. Extensibility is the sanctioned `PooledAction` trait with one `WithdrawAction` impl, dispatched by an `ActionKind` enum.
 
@@ -17,13 +17,20 @@ Every task's requirements implicitly include this section. Copy exact values ver
 - **Custody fail-closed.** On-chain paths return typed `PoolError`s. No `unwrap()`/`expect()`/`panic!` on attacker-influenced input. Use checked arithmetic / `require!`-guarded math for every amount, index, and count.
 - **`k`-floor is enforced ON-CHAIN**, not just off-chain. `execute_round` MUST reject any batch with `intent_count < k_floor`. `MIN_K_FLOOR = 2` — a pool with `k_floor < 2` is rejected at `initialize_pool`.
 - **Uniform actor.** All payouts of a round happen in ONE transaction signed only by the vault PDA (`invoke_signed`). No per-intent standalone payout instruction may exist.
-- **No standalone `withdraw`.** The single-user `withdraw` instruction is removed; a k=1 exit would bypass the anonymity set. Exit is only via a round.
+- **No standalone `withdraw`.** The single-user `withdraw` instruction is removed; the **anonymous** exit is only the k-anonymous batch (`execute_round`, `intent_count ≥ k_floor`). `cancel_intent` remains as a single-note deposit-reclaim safety valve (recipient-authorized, value-conserving) — it is explicitly NOT an anonymous exit and makes no k-anonymity claim; it exists so committed funds are never lockable by a censoring coordinator or a round that never fills. (Timeout-gating cancel to make it genuinely last-resort is deferred — see Self-Review.)
 - **Never log, emit, or return secrets** — no note secret, nullifier preimage, or member→action mapping. Events carry only already-public data.
 - **Front-run safety is preserved.** The payout accounts ARE the keys hashed into the proof's `extDataHash` (recipient/relayer), recorded in the `Intent` and paid verbatim at execute — never re-derived from separate args.
 - **Invariant logic lives in pure `pub fn`s with host unit tests** (`cargo-llvm-cov` cannot see SBF in-VM lines): `meets_k_floor`, `split_payout`, and the `MerkleTree` path/root math.
 - **Large accounts are `Box`ed / `zero_copy` and mutated in place** — never copy the ~3.9 KB `Pool` by value onto the 4 KB SBF stack. `Pool` stays `#[account(zero_copy)]`, `repr(C)`, no implicit padding (bytemuck `Pod` rejects it at compile time).
 - **Tests are Rust-native**: host unit tests + LiteSVM. No TypeScript, no `solana-test-validator` in the inner loop. Adversarial/negative cases are mandatory for anything security-relevant (sub-k, replay, double-commit, cross-pool intent, fund redirection).
 - **`TREE_HEIGHT = 20`, `ROOT_HISTORY_SIZE = 100`** (unchanged). `ark-circom` pinned at 0.5.
+- **Error variants are APPEND-ONLY.** Anchor assigns `PoolError` codes from 6000 in
+  declaration order, and existing tests hardcode them (`deposit.rs` → 6001/6002;
+  `withdraw.rs` until Task 6 → 6005/6007). Every new variant (`KFloorTooLow`,
+  `WrongRound`, `RoundClosed`, `RoundOverflow`, `KFloorNotMet`,
+  `IntentAccountsMismatch`, `IntentInvalid`, `IntentAccountMismatch`,
+  `DuplicateIntent`) MUST be appended after `FeeExceedsDenomination` — never
+  inserted or reordered — or those hardcoded codes silently shift and break.
 - A change isn't done until `cargo test -p <crate>` is green and you've said so with the output.
 
 ---
@@ -1020,17 +1027,68 @@ fn commit_intent_rejects_unknown_root() {
         .svm
         .send_transaction(Transaction::new(&[&fx.payer], msg, fx.svm.latest_blockhash()))
         .expect_err("unknown root must fail");
+    // M4: assert the SPECIFIC guard fired (UnknownRoot), not just "some error" —
+    // `UnknownRoot` stays a stable variant (new errors are appended, never
+    // reordered — see Global Constraints), so a log-substring check is non-tautological.
     assert!(
-        matches!(
-            outcome.err,
-            TransactionError::InstructionError(_, InstructionError::Custom(_))
-        ),
-        "expected a program error for unknown root; got {:?}",
-        outcome.err
+        outcome.meta.logs.iter().any(|l| l.contains("UnknownRoot")),
+        "expected UnknownRoot; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+// I4: `fee > denomination` is a reachable value guard on the commit path (it
+// fires BEFORE proof verification), and must fail closed. Reuse intent 0's real
+// proof but set an out-of-range fee in the instruction data.
+#[test]
+fn commit_intent_rejects_fee_over_denomination() {
+    let mut fx = build_round_fixture(2, 1);
+    let m = &fx.intents[0];
+    let (round0, _) = Pubkey::find_program_address(
+        &[b"round", fx.pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+    let bad_fee = round_support::DENOMINATION + 1;
+    let mut data = round_support::disc("commit_intent").to_vec();
+    data.extend_from_slice(&m.proof.a);
+    data.extend_from_slice(&m.proof.b);
+    data.extend_from_slice(&m.proof.c);
+    data.extend_from_slice(&m.root);
+    data.extend_from_slice(&m.nullifier_hash);
+    data.extend_from_slice(&bad_fee.to_le_bytes());
+    data.extend_from_slice(&0u64.to_le_bytes());
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(fx.pool, false),
+            AccountMeta::new(round0, false),
+            AccountMeta::new(m.intent_pda, false),
+            AccountMeta::new(m.nullifier_pda, false),
+            AccountMeta::new_readonly(m.recipient, false),
+            AccountMeta::new_readonly(m.relayer, false),
+            AccountMeta::new(fx.payer.pubkey(), true),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+    let msg = Message::new(
+        &[ComputeBudgetInstruction::set_compute_unit_limit(400_000), ix],
+        Some(&fx.payer.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(&[&fx.payer], msg, fx.svm.latest_blockhash()))
+        .expect_err("fee exceeding the denomination must fail closed");
+    assert!(
+        outcome.meta.logs.iter().any(|l| l.contains("FeeExceedsDenomination")),
+        "expected FeeExceedsDenomination; logs: {:?}",
+        outcome.meta.logs
     );
 }
 ```
 (Expose `disc` from `round_support` — it already re-exports `common::disc`.)
+
+**Also add to `execute_round.rs` (Task 4) a `commit_to_executed_round_rejects` test** covering the reachable `WrongRound` guard on the commit path (the one round-guard that survives after I3): build `build_round_fixture(2, 3)`, commit intents 0 and 1 to round 0, run `execute_round(0)`, then `commit_intent_tx(&fx, 2, 0)` — committing note 2 to the now-**executed** round 0 while `current_round_id == 1`. Assert the logs contain `"WrongRound"` (round_id 0 != current 1; fires before any PDA init). This is the only place `WrongRound` is reachable, so it belongs with the executed-round setup that `execute_round.rs` already has.
 
 - [ ] **Step 3: Run to verify it fails**
 
@@ -1426,12 +1484,17 @@ Add `pub mod action;` is already declared (Task 2). Add the handler to `#[progra
             let pool = ctx.accounts.pool.load()?;
             (pool.denomination, pool.vault_bump, pool.k_floor, pool.current_round_id)
         };
-        require!(round_id == current_round_id, PoolError::WrongRound);
-        require!(
-            ctx.accounts.round.state == crate::round::RoundState::Open,
-            PoolError::RoundClosed
-        );
-
+        // Re-execution and stale/future round_id are impossible by construction —
+        // an explicit `round.state`/`round_id` check here would be UNREACHABLE dead
+        // code (CLAUDE.md forbids it), because the account constraints ARE the guard:
+        //   * `next_round` is `init` at seeds ["round", pool, round_id+1]; once this
+        //     round has executed, round_id+1 already exists → its init fails "already
+        //     in use" atomically, so a round executes at most once.
+        //   * a future/non-existent `round_id` fails Anchor's `round` account load
+        //     before the handler body runs.
+        // Rounds are created strictly sequentially (Round(0) at init, Round(N+1) at
+        // execute(N)), so the ONLY reachable path here has `round_id == current_round_id`;
+        // the `current_round_id + 1` bump below is therefore correct.
         let count = ctx.accounts.round.intent_count;
         require!(
             crate::invariants::meets_k_floor(count, k_floor),
@@ -1598,44 +1661,149 @@ fn execute_round_rejects_duplicate_padding() {
     );
 }
 
+// I1 (custody-critical): the fund-redirection guard. Present the CORRECT intent
+// PDA but a SUBSTITUTED recipient account — the payout must be refused, proving
+// `execute_round` pays only the extDataHash-bound keys stored in the Intent.
 #[test]
-fn execute_round_rejects_foreign_pool_intent() {
-    // Two independent pools; try to execute pool A's round using pool B's intent.
-    let mut fx_a = build_round_fixture(2, 2);
-    fx_a.svm.send_transaction(commit_intent_tx(&fx_a, 0, 0)).unwrap();
+fn execute_round_rejects_redirected_payout() {
+    let mut fx = build_round_fixture(2, 2);
+    fx.svm.send_transaction(commit_intent_tx(&fx, 0, 0)).unwrap();
+    fx.svm.expire_blockhash();
+    fx.svm.send_transaction(commit_intent_tx(&fx, 1, 0)).unwrap();
 
-    // Fabricate a second "intent" by pointing at pool A's own second intent PDA
-    // that was never committed (it does not exist) OR at a foreign key: the
-    // simplest robust check is that a random non-intent account is rejected.
     let cranker = Keypair::new();
-    fx_a.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
-    fx_a.svm.expire_blockhash();
-    fx_a.svm.send_transaction(commit_intent_tx(&fx_a, 1, 0)).unwrap();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
 
-    let foreign = Pubkey::new_unique(); // not a program-owned Intent
+    let attacker = Pubkey::new_unique();
     let triples = vec![
-        (fx_a.intents[0].intent_pda, fx_a.intents[0].recipient, fx_a.intents[0].relayer),
-        (foreign, fx_a.intents[1].recipient, fx_a.intents[1].relayer),
+        // intent 0's real PDA, but the attacker's account swapped in as recipient.
+        (fx.intents[0].intent_pda, attacker, fx.intents[0].relayer),
+        (fx.intents[1].intent_pda, fx.intents[1].recipient, fx.intents[1].relayer),
     ];
-    fx_a.svm.expire_blockhash();
-    let ix = execute_round_ix(&fx_a, 0, cranker.pubkey(), &triples);
+    fx.svm.expire_blockhash();
+    let ix = execute_round_ix(&fx, 0, cranker.pubkey(), &triples);
     let msg = Message::new(
         &[ComputeBudgetInstruction::set_compute_unit_limit(400_000), ix],
         Some(&cranker.pubkey()),
     );
-    let outcome = fx_a
+    let outcome = fx
         .svm
-        .send_transaction(Transaction::new(&[&cranker], msg, fx_a.svm.latest_blockhash()))
-        .expect_err("a non-intent / foreign account must be rejected");
-    assert!(matches!(
-        outcome.err,
-        TransactionError::InstructionError(_, InstructionError::Custom(_))
-    ));
+        .send_transaction(Transaction::new(&[&cranker], msg, fx.svm.latest_blockhash()))
+        .expect_err("a substituted payout account must be rejected");
+    assert!(
+        outcome.meta.logs.iter().any(|l| l.contains("IntentAccountMismatch")),
+        "expected IntentAccountMismatch; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+// I2: the cross-pool binding guard `require_keys_eq!(intent.pool, pool_key)`.
+// A random pubkey would only trip `Account::try_from` (owner/discriminator), NOT
+// this check. To drive it, craft a REAL, program-owned `Intent` (valid
+// discriminator) whose `pool` field is some OTHER pool, inject it via
+// `set_account`, and present it — only the `intent.pool` check can reject it.
+#[test]
+fn execute_round_rejects_intent_from_another_pool() {
+    use anchor_lang::AccountSerialize;
+    use pool_program::round::{ActionKind, Intent};
+    use solana_sdk::account::Account;
+
+    let mut fx = build_round_fixture(2, 2);
+    fx.svm.send_transaction(commit_intent_tx(&fx, 0, 0)).unwrap();
+    fx.svm.expire_blockhash();
+    fx.svm.send_transaction(commit_intent_tx(&fx, 1, 0)).unwrap();
+
+    // A program-owned Intent that belongs to a DIFFERENT pool but is otherwise
+    // well-formed (correct discriminator, round_id matches this round).
+    let other_recipient = Pubkey::new_unique();
+    let other_relayer = Pubkey::new_unique();
+    let foreign = Intent {
+        pool: Pubkey::new_unique(), // NOT fx.pool
+        round_id: 0,
+        recipient: other_recipient,
+        relayer: other_relayer,
+        fee: FEE,
+        action: ActionKind::Withdraw,
+    };
+    let mut data = Vec::new();
+    foreign.try_serialize(&mut data).unwrap(); // writes discriminator + fields
+    let foreign_addr = Pubkey::new_unique();
+    fx.svm
+        .set_account(
+            foreign_addr,
+            Account {
+                lamports: 10_000_000,
+                data,
+                owner: program_id(), // program-owned so try_from's owner check passes
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+
+    let cranker = Keypair::new();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
+    // Replace intent 1 with the foreign-pool intent (unique addr, so no dup).
+    let triples = vec![
+        (fx.intents[0].intent_pda, fx.intents[0].recipient, fx.intents[0].relayer),
+        (foreign_addr, other_recipient, other_relayer),
+    ];
+    fx.svm.expire_blockhash();
+    let ix = execute_round_ix(&fx, 0, cranker.pubkey(), &triples);
+    let msg = Message::new(
+        &[ComputeBudgetInstruction::set_compute_unit_limit(400_000), ix],
+        Some(&cranker.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(&[&cranker], msg, fx.svm.latest_blockhash()))
+        .expect_err("an intent bound to another pool must be rejected");
+    assert!(
+        outcome.meta.logs.iter().any(|l| l.contains("IntentInvalid")),
+        "expected IntentInvalid (intent.pool != pool); logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+// I4: the `remaining_accounts.len() == intent_count * 3` completeness check.
+// count meets the k-floor, but the batch is missing an intent's accounts.
+#[test]
+fn execute_round_rejects_incomplete_account_set() {
+    let mut fx = build_round_fixture(2, 2);
+    fx.svm.send_transaction(commit_intent_tx(&fx, 0, 0)).unwrap();
+    fx.svm.expire_blockhash();
+    fx.svm.send_transaction(commit_intent_tx(&fx, 1, 0)).unwrap();
+
+    let cranker = Keypair::new();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
+    // count == 2 (meets k), but pass only ONE triple → len 3 != 6.
+    let triples = vec![(
+        fx.intents[0].intent_pda,
+        fx.intents[0].recipient,
+        fx.intents[0].relayer,
+    )];
+    fx.svm.expire_blockhash();
+    let ix = execute_round_ix(&fx, 0, cranker.pubkey(), &triples);
+    let msg = Message::new(
+        &[ComputeBudgetInstruction::set_compute_unit_limit(400_000), ix],
+        Some(&cranker.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(&[&cranker], msg, fx.svm.latest_blockhash()))
+        .expect_err("an incomplete intent-account set must be rejected");
+    assert!(
+        outcome.meta.logs.iter().any(|l| l.contains("IntentAccountsMismatch")),
+        "expected IntentAccountsMismatch; logs: {:?}",
+        outcome.meta.logs
+    );
 }
 ```
 
 Run: `cargo test -p pool-program --test execute_round`
-Expected: PASS (4 tests).
+Expected: PASS (6 tests: happy+re-exec, sub-k, duplicate-padding, redirect, cross-pool, incomplete-set).
+
+Also correct the re-execution assertion comment inside `execute_round_pays_the_batch_and_enforces_k_floor` (Task 4 Step 2): the second `execute_round(0)` fails because **`next_round` (round 1) already exists so its `init` fails "already in use"** — NOT because of a `RoundClosed`/`WrongRound` handler check (those were removed as unreachable, see Step 4). Update that comment and assert the log contains `"already in use"`.
 
 - [ ] **Step 7: Lint + commit**
 
@@ -2218,4 +2386,13 @@ git commit -m "feat(sdk): round instruction builders + e2e; remove standalone wi
 
 **3. Type consistency:** `Intent { pool, round_id, recipient, relayer, fee, action }` and `Round { state, intent_count }` are used identically in `round.rs` (Task 2), the handlers (Tasks 3–5), and the tests. `meets_k_floor(u32, u16)` / `split_payout(u64,u64)->Result<(u64,u64)>` signatures match between `invariants.rs`, `action.rs` (`WithdrawAction::execute`), and `execute_round`. `MerkleTree`/`MerklePath` fields (`elements`,`indices`) match Task 1 and the fixture. Instruction arg order (and thus Borsh data layout) is consistent between each handler's `#[instruction(...)]`, the test tx builders, and the SDK builders (`commit_intent`: proof, root, nullifier_hash, fee, round_id).
 
-**Deferred (out of scope, noted):** off-chain coordinator service, additional `PooledAction` adapters (Stake/Swap), `emergency_withdraw`, executed-intent rent reclamation (`execute_round` leaves executed `Intent` PDAs in place — round-state guards re-execution; a `reap` cleanup instruction is a Plan 5+ optimization), multi-denomination, production trusted-setup ceremony, empirical anonymity simulation (§6.5).
+**4. Folded from the independent pre-implementation review:**
+- **I3 (dead code removed):** `execute_round`'s `WrongRound`/`RoundClosed` handler checks were removed — the `next_round` `init` constraint and Anchor's `round` account load ARE the re-execution / stale-round guards (Task 4 Step 4). `WrongRound` survives only in `commit_intent` (reachable); `RoundClosed` only in `commit_intent`/`cancel_intent` (cancel's is a CRITICAL guard against a double-refund after execute).
+- **I1/I2/I4 (test hardening):** added `execute_round` tests for payout redirection (`IntentAccountMismatch`), a real cross-pool intent (a crafted program-owned `Intent` with a foreign `pool` → `IntentInvalid`), an incomplete account set (`IntentAccountsMismatch`), plus commit-path `fee > denomination` and commit-to-executed-round (`WrongRound`) negatives. Every reachable guard now has an honest test.
+- **I6 (intentional spec deviation):** proof verification happens ONCE at `commit_intent`, not re-verified at `execute_round` (spec §4 ⑤ says "re-verify"). This is deliberate and stronger — the nullifier is already burned and payout keys already bound, so re-verification is redundant, and it keeps the ~107k-CU `alt_bn128` pairing OUT of the k-way batch (mitigating the k-per-transaction ceiling below).
+- **M2:** `MerkleTree::insert` expects in-field leaves (as produced by `Note::commitment`); documented as a precondition rather than returning `Result` — the fixture only ever inserts `Note` commitments.
+- **M6:** `crates/sdk/tests/sdk.rs` is NOT an `initialize_pool` caller (it uses `build_deposit_ix`/`build_withdraw_ix` only) — Task 2's sweep drops it (it's rewritten in Task 6).
+- **M7 (honest scope):** the on-chain k-floor guarantees k *intents*, not k distinct *participants* — a self-Sybil can commit k of its own notes. Anti-Sybil (bonding) is spec §5's deferred phase-4 work; this plan ships the enforcement primitive, not Sybil resistance.
+- **Whole-branch review IMPORTANT-1 (guarantee honesty):** `cancel_intent` is a **single-note, sub-k exit** — a committed intent's recipient can commit then immediately reclaim its deposit to a fresh unlinkable address, which has the same privacy profile as the removed single-user `withdraw`. This is intentional and value-conserving (a recipient-authorized refund of the depositor's own note, redirection-proof via `has_one` + the bound `extDataHash`) and a *necessary* custody safety valve (without it, a censoring/offline coordinator or a never-filling round could lock funds forever). The k-anonymity guarantee is therefore scoped to the **batch** exit (`execute_round`); the Goal/constraints wording and the `cancel_intent` doc comment are corrected to say so, rather than claiming "exit only in a crowd of ≥ k." Anti-mixer-bypass hardening (below) is deferred.
+
+**Deferred (out of scope, noted):** off-chain coordinator service, additional `PooledAction` adapters (Stake/Swap), `emergency_withdraw`, executed-intent rent reclamation (`execute_round` leaves executed `Intent` PDAs in place — round-state guards re-execution; a `reap` cleanup instruction is a Plan 5+ optimization), multi-denomination, production trusted-setup ceremony, empirical anonymity simulation (§6.5). **I5 — the k-per-transaction ceiling:** each intent consumes 3 `remaining_accounts` + 2 vault CPIs, so a single `execute_round` tx (Solana's account/CU/1232-byte limits, no ALTs in this scope) caps a round at roughly a dozen intents; batched/paginated or ALT-based large rounds are future work — the Task 4 test prints CU at k=2 to seed a per-intent cost estimate. **M5 — no events:** `commit_intent`/`execute_round`/`cancel_intent` emit no events (a conscious YAGNI call for the on-chain-core scope; clients poll PDAs/balances); event emission for client scanning (spec §4 ⑥) is deferred with the coordinator. **M1 — `round_id + 1` overflow:** seed derivation for `next_round` panics under `overflow-checks` at `round_id == u64::MAX` (unreachable — needs 2^64 rounds); noted, not guarded. **Timeout-gated `cancel_intent` (anti-mixer-bypass hardening):** store the round's open slot/timestamp in the `Round` account and require a deadline to elapse before `cancel_intent` is allowed, so it is genuinely last-resort (matching spec §5's "after timeout") and cannot be used as an instant single-note bypass of the batch. This is a real design addition (Round layout change + logic + tests) and still would not make cancel k-anonymous (it is fundamentally a single-note exit) — deferred to a follow-up plan; the honest guarantee wording lands now regardless (see IMPORTANT-1 above).

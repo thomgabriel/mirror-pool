@@ -1,14 +1,15 @@
-//! Builds a `deposit` + `withdraw` instruction via the SDK's own builders and
-//! asserts the SDK's computed `nullifier_hash`/`extDataHash` (encoded into
-//! the `withdraw` instruction's data) byte-match what `pool-program`'s
-//! `withdraw` handler independently recomputes for the SAME inputs — i.e.
-//! that the SDK and the on-chain program agree on every hash binding a
-//! withdraw. Reuses the committed note bundle
+//! Builds a `deposit` + `commit_intent` instruction via the SDK's own
+//! builders and asserts the SDK's computed `nullifier_hash`/`extDataHash`
+//! (encoded into the `commit_intent` instruction's data) byte-match what
+//! `pool-program`'s `commit_intent` handler independently recomputes for the
+//! SAME inputs — i.e. that the SDK and the on-chain program agree on every
+//! hash binding a commit. Reuses the committed note bundle
 //! (`circuits/test/withdraw_vectors.json`) for the note/root/Merkle path,
-//! same as `programs/pool-program/tests/withdraw.rs`'s fixture. A full
-//! on-chain LiteSVM run (actually submitting these instructions) is Task 6.
+//! same as `programs/pool-program/tests/round_support.rs`'s fixture. A full
+//! on-chain LiteSVM run (actually submitting these instructions) is
+//! `crates/sdk/tests/e2e.rs`.
 
-use sdk::{build_deposit_ix, build_withdraw_ix, compute_ext_data_hash, MerklePath, Note};
+use sdk::{build_commit_intent_ix, build_deposit_ix, compute_ext_data_hash, MerklePath, Note};
 use serde_json::Value;
 use solana_sdk::pubkey::Pubkey;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Mirrors `programs/pool-program/tests/withdraw.rs::ensure_build_artifacts` —
+/// Mirrors `programs/pool-program/tests/round_support.rs::ensure_build_artifacts` —
 /// the `circuits/build/*` artifacts are gitignored outputs of
 /// `circuits/scripts/setup.sh`; generate them rather than skip the real
 /// prove this test exists to exercise.
@@ -69,7 +70,8 @@ fn decode_be_hex(s: &str) -> [u8; 32] {
 
 /// Loads the committed bundle's note (`nullifier`/`secret`), its Merkle path,
 /// and its root — the same underlying deposited note as
-/// `programs/pool-program/tests/withdraw.rs`'s fixture.
+/// `programs/pool-program/tests/round_support.rs`'s fixture builds fresh
+/// proofs for.
 fn load_bundle() -> (Note, [u8; 32], MerklePath) {
     let path = workspace_root().join("circuits/test/withdraw_vectors.json");
     let raw = std::fs::read_to_string(&path)
@@ -137,20 +139,21 @@ fn deposit_ix_uses_the_notes_commitment() {
     assert_eq!(&ix.data[40..48], &denomination.to_le_bytes());
 }
 
-/// The load-bearing assertion: builds a real `withdraw` instruction via the
-/// SDK, then independently recomputes `nullifier_hash` (from the note) and
-/// `ext_data_hash` (from the payout accounts + fee) exactly as
-/// `programs/pool-program/src/lib.rs`'s `withdraw` handler does, and asserts
-/// the instruction's encoded public-input fields match — proving the SDK and
-/// the on-chain program agree.
+/// The load-bearing assertion: builds a real `commit_intent` instruction via
+/// the SDK, then independently recomputes `nullifier_hash` (from the note)
+/// and `ext_data_hash` (from the payout accounts + fee) exactly as
+/// `programs/pool-program/src/lib.rs`'s `commit_intent` handler does, and
+/// asserts the instruction's encoded public-input fields match — proving the
+/// SDK and the on-chain program agree.
 #[test]
-fn withdraw_ix_public_inputs_match_program_recomputation() {
+fn commit_intent_ix_public_inputs_match_program_recomputation() {
     let build_dir = ensure_build_artifacts();
     let (note, root, merkle_path) = load_bundle();
 
     let recipient = Pubkey::new_unique();
     let relayer = Pubkey::new_unique();
     let fee = 1_000u64;
+    let round_id = 0u64;
 
     let artifacts = sdk::WithdrawArtifacts {
         wasm_path: &build_dir.join("withdraw_js").join("withdraw.wasm"),
@@ -159,17 +162,20 @@ fn withdraw_ix_public_inputs_match_program_recomputation() {
     };
 
     let pool = Pubkey::new_unique();
-    let vault = Pubkey::new_unique();
+    let payer = Pubkey::new_unique();
+    let round = sdk::round_pda(pool, round_id);
 
-    let build = build_withdraw_ix(
+    let build = build_commit_intent_ix(
         pool,
-        vault,
+        round,
         recipient,
         relayer,
+        payer,
         &note,
         &merkle_path,
         root,
         fee,
+        round_id,
         artifacts,
     )
     .expect("proving the committed note bundle must succeed");
@@ -187,8 +193,8 @@ fn withdraw_ix_public_inputs_match_program_recomputation() {
     );
 
     // --- ext_data_hash: recompute exactly as
-    // `programs/pool-program/src/lib.rs`'s `withdraw` handler does, from the
-    // SAME payout account keys + fee that are listed in the built
+    // `programs/pool-program/src/lib.rs`'s `commit_intent` handler does, from
+    // the SAME payout account keys + fee that are listed in the built
     // instruction's accounts (recipient, relayer) — this is the
     // front-run-safety binding.
     let program_recomputed_ext_data_hash =
@@ -202,30 +208,44 @@ fn withdraw_ix_public_inputs_match_program_recomputation() {
     // --- The instruction's encoded data must carry exactly these same
     // values (root/nullifier_hash as raw bytes, matching Anchor's
     // declaration-order Borsh layout: disc(8) || a(64) || b(128) || c(64) ||
-    // root(32) || nullifier_hash(32) || fee_le(8)).
+    // root(32) || nullifier_hash(32) || fee_le(8) || round_id_le(8)).
     let data = &build.instruction.data;
-    assert_eq!(data.len(), 8 + 64 + 128 + 64 + 32 + 32 + 8);
+    assert_eq!(data.len(), 8 + 64 + 128 + 64 + 32 + 32 + 8 + 8);
     let root_off = 8 + 64 + 128 + 64;
     let nh_off = root_off + 32;
     let fee_off = nh_off + 32;
+    let round_id_off = fee_off + 8;
     assert_eq!(&data[root_off..root_off + 32], &build.public_inputs.root);
     assert_eq!(
         &data[nh_off..nh_off + 32],
         &build.public_inputs.nullifier_hash
     );
     assert_eq!(&data[fee_off..fee_off + 8], &fee.to_le_bytes());
+    assert_eq!(
+        &data[round_id_off..round_id_off + 8],
+        &round_id.to_le_bytes()
+    );
 
     // --- Accounts: recipient/relayer must be the exact accounts the
     // extDataHash above was derived from (this is what makes redirection
     // impossible without invalidating the proof).
     assert_eq!(build.instruction.accounts[0].pubkey, pool);
-    assert_eq!(build.instruction.accounts[1].pubkey, vault);
-    assert_eq!(build.instruction.accounts[3].pubkey, recipient);
-    assert_eq!(build.instruction.accounts[4].pubkey, relayer);
-    assert!(build.instruction.accounts[4].is_signer, "relayer signs");
+    assert_eq!(build.instruction.accounts[1].pubkey, round);
+    assert_eq!(build.instruction.accounts[4].pubkey, recipient);
+    assert_eq!(build.instruction.accounts[5].pubkey, relayer);
+    assert_eq!(build.instruction.accounts[6].pubkey, payer);
+    assert!(build.instruction.accounts[6].is_signer, "payer signs");
 
-    // --- The nullifier PDA account must be derivable the same way
-    // `programs/pool-program/src/lib.rs`'s `Withdraw` context derives it.
+    // --- The intent/nullifier PDAs must be derivable the same way
+    // `programs/pool-program/src/lib.rs`'s `CommitIntent` context derives them.
+    let (expected_intent_pda, _) = Pubkey::find_program_address(
+        &[
+            b"intent",
+            pool.as_ref(),
+            build.public_inputs.nullifier_hash.as_ref(),
+        ],
+        &pool_program::ID,
+    );
     let (expected_nullifier_pda, _) = Pubkey::find_program_address(
         &[
             b"nullifier",
@@ -234,5 +254,6 @@ fn withdraw_ix_public_inputs_match_program_recomputation() {
         ],
         &pool_program::ID,
     );
-    assert_eq!(build.instruction.accounts[2].pubkey, expected_nullifier_pda);
+    assert_eq!(build.instruction.accounts[2].pubkey, expected_intent_pda);
+    assert_eq!(build.instruction.accounts[3].pubkey, expected_nullifier_pda);
 }

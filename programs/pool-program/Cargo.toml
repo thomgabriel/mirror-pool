@@ -58,6 +58,11 @@ solana-sdk = "~2.2"
 # own build guard).
 prover = { path = "../../crates/prover" }
 serde_json = "1"
+# The shared LiteSVM round fixture (tests/round_support.rs) builds its k-note
+# tree and per-note proofs via the SDK's `MerkleTree`/`Note`, not a hand-rolled
+# reimplementation — dev-only, so no cycle in the actual build graph (`sdk`
+# itself depends on `pool-program`).
+sdk = { path = "../../crates/sdk" }
 
 # anchor-lang's #[program]/#[derive(Accounts)] macros emit cfg(feature = "...") checks
 # for flags anchor-lang owns internally; declare them expected so rustc's check-cfg
