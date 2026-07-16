@@ -2,6 +2,7 @@
 name = "prover"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 ark-circom  = "0.5"     # pins arkworks 0.5 + wasmer 4.4 — DO NOT bump to 0.6 (see plan Global Constraints)

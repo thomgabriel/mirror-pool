@@ -2,6 +2,7 @@
 name = "vk-gen"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 # Reuses prover's g1_to_solana_be/g2_to_solana_be conversion helpers — the
