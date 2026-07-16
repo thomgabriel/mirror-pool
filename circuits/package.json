@@ -1,0 +1,11 @@
+{
+  "name": "mirror-pool-circuits",
+  "private": true,
+  "scripts": { "test": "mocha --timeout 120000 test/**/*.test.js" },
+  "devDependencies": {
+    "circom_tester": "^0.0.20",
+    "circomlib": "^2.0.5",
+    "snarkjs": "^0.7.4",
+    "mocha": "^10.4.0"
+  }
+}
