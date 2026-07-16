@@ -1,3 +1,4 @@
+use pool_program::merkle::{empty_root, insert, zeros, TREE_HEIGHT};
 use pool_program::poseidon::hash2;
 use solana_poseidon::{hashv, Endianness, Parameters};
 
@@ -60,6 +61,52 @@ fn main() {
             }
             out.push_str("]}");
             println!("{out}");
+        }
+        Some("note-bundle") => {
+            let z = zeros().expect("zeros");
+            let mut next_index = 0u32;
+            let mut root = empty_root(&z).expect("empty_root");
+            let mut filled = z;
+
+            // decoy leaf at index 0 (so the real note is index 1 -> right child at level 0)
+            let decoy = hash2(&feb(111), &feb(222)).expect("in-field");
+            insert(&mut next_index, &mut root, &mut filled, decoy).expect("insert decoy");
+
+            // real note
+            let nullifier = feb(7);
+            let secret = feb(9);
+            let commitment = hash2(&nullifier, &secret).expect("in-field");
+
+            // path for the note's index from the snapshot BEFORE its insert
+            let filled_before = filled;
+            let target = next_index; // 1
+            let mut path_elements = [[0u8; 32]; TREE_HEIGHT];
+            let mut path_indices = [0u8; TREE_HEIGHT];
+            let mut idx = target;
+            for i in 0..TREE_HEIGHT {
+                let bit = (idx % 2) as u8;
+                path_indices[i] = bit;
+                path_elements[i] = if bit == 0 { z[i] } else { filled_before[i] };
+                idx /= 2;
+            }
+            // authoritative root from the real insert
+            insert(&mut next_index, &mut root, &mut filled, commitment).expect("insert note");
+
+            let nh = nullifier_hash(&nullifier);
+            let pe = path_elements
+                .iter()
+                .map(hex)
+                .collect::<Vec<_>>()
+                .join("\",\"");
+            let pi = path_indices
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            println!(
+                "{{\"nullifier\":\"{}\",\"secret\":\"{}\",\"commitment\":\"{}\",\"nullifierHash\":\"{}\",\"root\":\"{}\",\"pathElements\":[\"{}\"],\"pathIndices\":[{}]}}",
+                hex(&nullifier), hex(&secret), hex(&commitment), hex(&nh), hex(&root), pe, pi
+            );
         }
         Some(other) => {
             eprintln!("unknown subcommand: {other}");
