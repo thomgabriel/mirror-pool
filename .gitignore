@@ -13,7 +13,7 @@ test-ledger/
 node_modules/
 circuits/build/
 
-# ZK artifacts (large; test ptau is committed explicitly where needed)
+# ZK artifacts (large; ptau/zkey/wasm/r1cs are fetched or built, never committed — see circuits/ptau/README.md)
 *.zkey
 *.r1cs
 *.wasm.map
