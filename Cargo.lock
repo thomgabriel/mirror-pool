@@ -4867,6 +4867,7 @@ name = "sdk"
 version = "0.1.0"
 dependencies = [
  "ext-data",
+ "litesvm",
  "pool-program",
  "prover",
  "rand 0.8.7",

@@ -20,3 +20,8 @@ rand = "0.8"
 
 [dev-dependencies]
 serde_json = "1"
+# LiteSVM end-to-end test: exercises the SDK's public builders
+# (`build_initialize_pool_ix`/`build_deposit_ix`/`build_withdraw_ix`) against
+# a real on-chain program, not hand-built instructions (that's
+# `pool-program/tests/withdraw.rs`'s job).
+litesvm = "=0.6.1"
