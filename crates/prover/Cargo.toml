@@ -1,0 +1,18 @@
+[package]
+name = "prover"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ark-circom  = "0.5"     # pins arkworks 0.5 + wasmer 4.4 — DO NOT bump to 0.6 (see plan Global Constraints)
+ark-bn254   = "0.5"
+ark-groth16 = "0.5"
+ark-ff      = "0.5"
+ark-serialize = "0.5"
+ark-std     = "0.5"    # RNG for Groth16::create_random_proof_with_reduction — not in the brief's list, required
+num-bigint  = "0.4"
+tokio       = { version = "1", features = ["rt"] }  # ark-circom's wasmer-wasix WASI env needs an active Tokio reactor
+
+[dev-dependencies]
+groth16-solana = "0.2"  # arkworks 0.5 — asserts the on-chain verifier byte format accepts our proof/VK
+serde_json = "1"
