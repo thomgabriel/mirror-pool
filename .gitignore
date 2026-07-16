@@ -17,6 +17,7 @@ circuits/build/
 *.zkey
 *.r1cs
 *.wasm.map
+*.ptau
 
 # SDD scratch (progress ledger is git-ignored working state)
 .superpowers/
