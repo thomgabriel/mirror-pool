@@ -1,0 +1,34 @@
+name: fetch-ptau
+description: >
+  Fetch and checksum-verify circuits/ptau/pot14_final.ptau (public Hermez
+  powers-of-tau, dev/CI only — see circuits/ptau/README.md), cached by sha256
+  so it's only downloaded once per runner cache generation.
+runs:
+  using: composite
+  steps:
+    # ⚠️ FIRST-RUN VALIDATION NEEDED: unexercised on a real Actions runner yet —
+    # watch the first run in case the cache action or the download URL needs
+    # adjusting (e.g. storage.googleapis.com rate limits / mirror changes).
+    - name: Cache pot14_final.ptau
+      id: cache-ptau
+      uses: actions/cache@v4
+      with:
+        path: circuits/ptau/pot14_final.ptau
+        # Keyed on the sha256 pinned in circuits/ptau/README.md / circuits/scripts/setup.sh —
+        # a checksum change forces a fresh download+verify rather than serving a stale cache.
+        key: ptau-pot14-489be9e5ac65d524f7b1685baac8a183c6e77924fdb73d2b8105e335f277895d
+    - name: Download pot14_final.ptau
+      if: steps.cache-ptau.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p circuits/ptau
+        curl -sL -o circuits/ptau/pot14_final.ptau \
+          https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_14.ptau
+    - name: Verify pot14_final.ptau sha256
+      # Re-verify on both cache hit and miss — corruption/staleness in the cache
+      # itself must not silently produce a non-reproducible VK (see setup.sh's
+      # own check for why authenticity, not just presence, matters).
+      shell: bash
+      run: |
+        echo "489be9e5ac65d524f7b1685baac8a183c6e77924fdb73d2b8105e335f277895d  circuits/ptau/pot14_final.ptau" \
+          | sha256sum -c -

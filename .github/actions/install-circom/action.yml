@@ -1,0 +1,21 @@
+name: install-circom
+description: >
+  Install the circom 2.1.6 compiler (a Rust binary, not an npm package),
+  pinned per docs/superpowers/plans/2026-07-15-circuits.md, cached across
+  runs since it's a slow `cargo install --git` build.
+runs:
+  using: composite
+  steps:
+    # ⚠️ FIRST-RUN VALIDATION NEEDED: watch the first Actions run in case this
+    # install step needs adjusting for the runner (matches check-vk's original
+    # inline step, now shared with the zk-tests job).
+    - name: Cache circom binary
+      id: cache-circom
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/bin/circom
+        key: circom-v2.1.6-${{ runner.os }}
+    - name: Install circom 2.1.6
+      if: steps.cache-circom.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install --git https://github.com/iden3/circom --tag v2.1.6 --locked

@@ -54,14 +54,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p pool-program --lib --locked
 
-  # ---------- 3. Anchor build + LiteSVM integration tests ----------
+  # ---------- 3. Anchor build + non-proof LiteSVM integration tests ----------
   # ⚠️ FIRST-RUN VALIDATION NEEDED: this job builds the SBF program (which fetches
   # platform-tools v1.54 via the manifest pin) and runs the LiteSVM integration tests
-  # (which load the built .so). Local dev uses solana-cli 3.0.1; if setup-anchor's
-  # Agave/platform-tools resolution differs on a fresh runner, adjust SOLANA_VERSION or
-  # the setup step here after watching the first Actions run.
+  # that don't need a Groth16 proof (deposit/initialize_pool/scaffold — they only need
+  # the built .so). Local dev uses solana-cli 3.0.1; if setup-anchor's Agave/platform-tools
+  # resolution differs on a fresh runner, adjust SOLANA_VERSION or the setup step here
+  # after watching the first Actions run.
+  # The proof-based integration tests (tests/withdraw.rs, tests/verifier.rs) need the
+  # circom + ptau ZK toolchain too, so they run in the `zk-tests` job instead — this job
+  # stays green without provisioning that toolchain.
   build-test:
-    name: anchor build + litesvm integration
+    name: anchor build + non-proof litesvm integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,15 +77,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Anchor build (SBF)
         run: anchor build
-      - name: Full test suite (unit + LiteSVM integration)
-        run: cargo test -p pool-program --locked
+      - name: Non-proof test suite (unit + deposit/initialize_pool/scaffold LiteSVM integration)
+        run: cargo test -p pool-program --lib --test deposit --test initialize_pool --test scaffold --locked
 
   # ---------- 4. VK drift guard ----------
   # ⚠️ FIRST-RUN VALIDATION NEEDED: regenerates circuits/build/verification_key.json
-  # via circuits/scripts/setup.sh (needs the circom compiler + snarkjs/node toolchain)
-  # then byte-compares the embedded on-chain VK (programs/pool-program/src/vk.rs)
-  # against what crates/vk-gen would generate from it. Watch the first Actions run
-  # in case the circom install step needs adjusting for the runner.
+  # via circuits/scripts/setup.sh (needs the circom compiler + snarkjs/node toolchain,
+  # and the pot14 ptau fetched below) then byte-compares the embedded on-chain VK
+  # (programs/pool-program/src/vk.rs) against what crates/vk-gen would generate from it.
+  # Watch the first Actions run in case the circom install / ptau fetch step needs
+  # adjusting for the runner.
   check-vk:
     name: check-vk (verifier-key drift guard)
     runs-on: ubuntu-latest
@@ -96,16 +101,50 @@ jobs:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: circuits/package-lock.json
-      - name: Install circom 2.1.6
-        # circom is a Rust binary (not an npm package) pinned per docs/superpowers/plans/2026-07-15-circuits.md
-        run: cargo install --git https://github.com/iden3/circom --tag v2.1.6 --locked
+      - uses: ./.github/actions/install-circom
       - name: npm ci (circuits)
         working-directory: circuits
         run: npm ci
+      - uses: ./.github/actions/fetch-ptau
       - name: Regenerate verification_key.json
         run: bash circuits/scripts/setup.sh
       - name: Byte-compare embedded VK against regenerated verification_key.json
         run: cargo run -p vk-gen -- --check
+
+  # ---------- 4b. ZK proof-based tests (circom + ptau + anchor build) ----------
+  # ⚠️ FIRST-RUN VALIDATION NEEDED: this is the one job that provisions the full
+  # ZK toolchain (circom + pot14 ptau) AND builds the SBF program, because the
+  # proof-based tests need both a real Groth16 proof (via circuits/scripts/setup.sh)
+  # and the on-chain program (via LiteSVM's `so_path`/`add_program_from_file`).
+  # Covers the security-critical proof/verifier paths plus the sdk↔prover↔pool-program
+  # end-to-end round trip (crates/sdk/tests/e2e.rs) that was previously not run in CI
+  # at all. Watch the first Actions run in case toolchain versions drift.
+  zk-tests:
+    name: zk proof tests (withdraw/verifier/prover/sdk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: metadaoproject/setup-anchor@v3.4
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-cli-version: ${{ env.SOLANA_VERSION }}
+          node-version: "20"
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/install-circom
+      - name: npm ci (circuits)
+        working-directory: circuits
+        run: npm ci
+      - uses: ./.github/actions/fetch-ptau
+      - name: Anchor build (SBF)
+        run: anchor build
+      - name: Generate circuit build artifacts (circom compile + trusted setup)
+        run: bash circuits/scripts/setup.sh
+      - name: Proof-based pool-program integration tests
+        run: cargo test -p pool-program --test withdraw --test verifier --locked
+      - name: Prover unit + integration tests
+        run: cargo test -p prover --locked
+      - name: SDK unit + e2e round-trip tests
+        run: cargo test -p sdk --locked
 
   # ---------- 5. Security / supply chain ----------
   supply-chain:
