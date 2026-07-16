@@ -222,6 +222,25 @@ single-commit + replay closed (nullifier PDA); privacy (no secret/preimage logge
   `denomination − stake_fee − stake_rent ≥ min_delegation`; `initialize_pool` enforces this
   (fail-closed) for `action_kind = Stake`. The plan pins the exact lamport constants; the *design
   constraint* is fixed here (no longer an open question).
+- **Second-order consequence — a hard ~1.003-SOL denomination floor, asymmetric against honest
+  crowd depth.** The `delegated ≥ min_delegation` constraint is not just arithmetic: `min_delegation
+  = 1 SOL` on mainnet (verified via `getStakeMinimumDelegation` → 1,000,000,000 lamports; the
+  `stake_raise_minimum_delegation_to_1_sol` feature is active). So every stake-pool participant must
+  deposit `> stake_fee + stake_rent(≈0.0023) + 1 SOL` ≈ **1.003+ SOL**, and a single-tx round
+  (k ≈ 17) needs ~17+ SOL committed by **17 distinct people**. Two implications the plan/roadmap
+  must carry:
+  1. **Partially resolves master spec §7** ("k value & denomination buckets", listed open): for a
+     *stake* pool the bucket is no longer a free parameter — it is **floored at ~1.003 SOL**.
+  2. **Directly tensions research-1's #1 finding** (cold-start / crowd depth is the binding
+     constraint, harder than the crypto): a >1-SOL floor prices out exactly the small participants
+     you need bodies from, while a whale clears it trivially — so the floor raises the bar for
+     *honest* depth **without** raising it for self-fill (asymmetric, same direction as the
+     whale-self-fill residual). Record it in the cold-start story; a lower-denomination *withdraw*
+     pool may be the on-ramp that feeds stake pools.
+  The tempting "fix" is a **trap**: one shared stake account per round would pay the 1-SOL minimum
+  once instead of k times, but it makes the *pool* custody the position (participants can't
+  self-service), breaking the delegate-only model and adding custody surface. Per-participant stake
+  accounts are correct; the ~1.003-SOL/participant floor is simply the price of pooled staking.
 - **Threat-model residual (nullifier-bound position).** The stake PDA is seeded by the public
   `nullifier_hash`, so the on-chain staking position is permanently bound to `N`. This does **not**
   leak the deposit (`N` is ZK-unlinkable to the note), but a participant who later undelegates /
