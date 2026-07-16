@@ -39,6 +39,8 @@ pub enum SdkError {
     /// A note field is not a canonical, in-field BN254 scalar
     /// (`pool_program::poseidon::is_in_field`).
     NotInField,
+    /// The Poseidon hash used to derive an empty-subtree constant failed.
+    MerkleHash,
 }
 
 /// A shielded note: `commitment = Poseidon2(nullifier, secret)` (the
@@ -184,6 +186,75 @@ pub fn build_deposit_ix(
 pub struct MerklePath {
     pub elements: [FieldBytes; TREE_DEPTH],
     pub indices: [u8; TREE_DEPTH],
+}
+
+/// Client-side incremental Merkle tree mirroring `pool_program::merkle`
+/// (`TREE_HEIGHT` levels, Poseidon2 nodes, empty positions filled with the
+/// same zero-subtree constants). Lets a client compute its note's
+/// authentication path from the leaves it has scanned — the private
+/// `MerklePath` inputs `prover::prove_withdraw` needs.
+pub struct MerkleTree {
+    leaves: Vec<[u8; 32]>,
+    zeros: [[u8; 32]; TREE_DEPTH],
+}
+
+impl MerkleTree {
+    pub fn new() -> Result<Self, SdkError> {
+        let zeros = pool_program::merkle::zeros().map_err(|_| SdkError::MerkleHash)?;
+        Ok(Self {
+            leaves: Vec::new(),
+            zeros,
+        })
+    }
+
+    /// Append a commitment; returns its leaf index.
+    pub fn insert(&mut self, leaf: [u8; 32]) -> usize {
+        self.leaves.push(leaf);
+        self.leaves.len() - 1
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        let mut level = self.leaves.clone();
+        for l in 0..TREE_DEPTH {
+            level = Self::next_level(&level, self.zeros[l]);
+        }
+        // After TREE_DEPTH pairings the single remaining node is the root; an
+        // empty tree collapses to the empty-root constant.
+        level
+            .first()
+            .copied()
+            .unwrap_or_else(|| pool_program::merkle::empty_root(&self.zeros).expect("empty_root"))
+    }
+
+    /// The authentication path (sibling per level, and the left/right bit per
+    /// level) for `index` against the current root.
+    pub fn authentication_path(&self, index: usize) -> MerklePath {
+        let mut elements = [[0u8; 32]; TREE_DEPTH];
+        let mut indices = [0u8; TREE_DEPTH];
+        let mut level = self.leaves.clone();
+        let mut pos = index;
+        for l in 0..TREE_DEPTH {
+            let bit = (pos % 2) as u8;
+            indices[l] = bit;
+            let sibling = pos ^ 1;
+            elements[l] = level.get(sibling).copied().unwrap_or(self.zeros[l]);
+            level = Self::next_level(&level, self.zeros[l]);
+            pos /= 2;
+        }
+        MerklePath { elements, indices }
+    }
+
+    fn next_level(nodes: &[[u8; 32]], zero: [u8; 32]) -> Vec<[u8; 32]> {
+        let mut out = Vec::with_capacity(nodes.len().div_ceil(2));
+        let mut i = 0;
+        while i < nodes.len() {
+            let left = nodes[i];
+            let right = nodes.get(i + 1).copied().unwrap_or(zero);
+            out.push(poseidon::hash2(&left, &right).expect("node hash in-field"));
+            i += 2;
+        }
+        out
+    }
 }
 
 /// Filesystem paths to the compiled withdraw circuit artifacts
@@ -391,5 +462,94 @@ mod tests {
         assert_eq!(ix.accounts.len(), 5);
         assert_eq!(ix.accounts[3].pubkey, payer);
         assert!(ix.accounts[3].is_signer);
+    }
+
+    fn tf(n: u8) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[31] = n;
+        b
+    }
+
+    fn tdecode_be_hex(s: &str) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn merkle_root_matches_pool_program_incremental_insert() {
+        // Same two leaves the committed bundle uses, same order.
+        let decoy = poseidon::hash2(&tf(111), &tf(222)).unwrap();
+        let note = poseidon::hash2(&tf(7), &tf(9)).unwrap();
+
+        let mut tree = MerkleTree::new().unwrap();
+        tree.insert(decoy);
+        tree.insert(note);
+
+        // Independent reference: the on-chain program's own incremental insert.
+        let z = pool_program::merkle::zeros().unwrap();
+        let mut next_index = 0u32;
+        let mut root = pool_program::merkle::empty_root(&z).unwrap();
+        let mut filled = z;
+        pool_program::merkle::insert(&mut next_index, &mut root, &mut filled, decoy).unwrap();
+        pool_program::merkle::insert(&mut next_index, &mut root, &mut filled, note).unwrap();
+
+        assert_eq!(
+            tree.root(),
+            root,
+            "SDK tree root must match on-chain incremental insert"
+        );
+    }
+
+    #[test]
+    fn merkle_path_matches_committed_bundle() {
+        // The committed circuit-validated bundle: reconstruct its 2-leaf tree and
+        // assert the SDK computes the SAME root/path the circuit signed off on.
+        let raw = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(std::path::Path::parent)
+                .unwrap()
+                .join("circuits/test/withdraw_vectors.json"),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+        let decoy = poseidon::hash2(&tf(111), &tf(222)).unwrap();
+        let note = poseidon::hash2(&tf(7), &tf(9)).unwrap();
+        let mut tree = MerkleTree::new().unwrap();
+        tree.insert(decoy);
+        let note_index = tree.insert(note); // 1
+
+        assert_eq!(
+            tree.root(),
+            tdecode_be_hex(v["root"].as_str().unwrap()),
+            "root"
+        );
+        let path = tree.authentication_path(note_index);
+        let want_elems: Vec<[u8; 32]> = v["pathElements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| tdecode_be_hex(e.as_str().unwrap()))
+            .collect();
+        let want_idx: Vec<u8> = v["pathIndices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_u64().unwrap() as u8)
+            .collect();
+        assert_eq!(
+            path.elements.to_vec(),
+            want_elems,
+            "pathElements must match circuit bundle"
+        );
+        assert_eq!(
+            path.indices.to_vec(),
+            want_idx,
+            "pathIndices must match circuit bundle"
+        );
     }
 }
