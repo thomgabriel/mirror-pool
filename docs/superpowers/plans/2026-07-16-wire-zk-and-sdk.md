@@ -12,7 +12,9 @@
 
 ## Global Constraints
 
-- **Recipient/relayer/fee binding via `extDataHash` (front-running protection):** the withdraw circuit gains ONE public input `extDataHash`. Off-chain (SDK) AND on-chain compute it identically: `extDataHash = keccak256(recipient(32) ‖ relayer(32) ‖ fee_le(8)) reduced mod BN254_MODULUS` (big-endian interpret the 32-byte keccak output, then `mod r`). A 32-byte Solana pubkey does NOT fit in one ~254-bit field element, so we bind the *hash*, not the raw pubkey. The instruction recomputes `extDataHash` from the passed `recipient`/`relayer`/`fee` and the Groth16 verification over public inputs `[root, nullifierHash, extDataHash]` fails if any of them was tampered with.
+- **Recipient/relayer/fee binding via `extDataHash` (front-running protection):** the withdraw circuit gains ONE public input `extDataHash`. Off-chain (SDK) AND on-chain compute it identically: `extDataHash = keccak256(recipient(32) ‖ relayer(32) ‖ fee_le(8)) reduced mod BN254_MODULUS` (big-endian interpret the 32-byte keccak output, then `mod r`). A 32-byte Solana pubkey does NOT fit in one ~254-bit field element, so we bind the *hash*, not the raw pubkey.
+- **🔴 CRITICAL — payout accounts MUST be the hashed pubkeys (no unbound args).** The `withdraw` handler must compute `extDataHash` from **`ctx.accounts.recipient.key()` / `ctx.accounts.relayer.key()`** (the accounts that actually receive lamports), NOT from separate `recipient: Pubkey` / `relayer: Pubkey` instruction args. If the hashed pubkeys were args separate from the payout accounts, an attacker could copy a victim's proof + args (so `extDataHash` still matches and the proof verifies) but substitute their own account in the payout slot and steal the funds — completely defeating the binding. So: `recipient`/`relayer` are ONLY accounts; `fee` is the one scalar arg. The hash is computed from the account keys, so the bound pubkeys *are* the payout accounts by construction.
+- **Single shared `ext_data_hash` implementation + KAT.** The keccak-concat + BE-`mod r` reduce lives in ONE `no_std`, no-anchor crate (`crates/ext-data` or similar) consumed by (a) `parity-fixtures` (circuit witness), (b) `pool-program` (`verifier`), and (c) `crates/sdk`. Commit a Known-Answer-Test fixture (fixed recipient/relayer/fee → exact 32-byte field element) that all three assert against — any divergence in concat order / `fee` LE / reduction silently breaks every honest proof. On-chain reduction: since a keccak digest is `< 2·r`, at most ONE conditional subtraction of `BN254_MODULUS_BE` is needed (constant-time BE compare-and-subtract) — do NOT pull `ark_ff` into the SBF program.
 - **Public input order (MUST match circuit ↔ prover ↔ on-chain):** `[root, nullifierHash, extDataHash]`, each a 32-byte **big-endian** field element `< BN254_MODULUS`.
 - **Byte layout:** reuse `crates/prover`'s existing `proof_a_to_solana_be` / `g1_to_solana_be` / `g2_to_solana_be` helpers (negated `proof.A`, BE G1/G2 with G2 `Fq2` swap) — do NOT re-derive. The embedded VK must be in the same `groth16-solana` byte format.
 - **Single denomination:** the pool is single-denomination. `initialize_pool(denomination: u64)` stores it; `deposit` requires `amount == pool.denomination`; `withdraw` pays `denomination - fee` to `recipient` and `fee` to `relayer` from the vault.
@@ -62,6 +64,8 @@ template Withdraw(depth) {
 }
 component main {public [root, nullifierHash, extDataHash]} = Withdraw(20);
 ```
+> **Public-input order:** circom orders public signals by TEMPLATE DECLARATION order, so declare `extDataHash` right after `nullifierHash` (as above) → `[root, nullifierHash, extDataHash]`, matching the prover's `get_public_inputs()` indexing and the on-chain `[root, nullifier_hash, ext]`. Do NOT move the declaration below the private signals or the IC binding silently permutes.
+> **`ext_data_hash` source:** Task 1 introduces the shared `crates/ext-data` (`no_std`, no-anchor) crate with `ext_data_hash(recipient:&[u8;32], relayer:&[u8;32], fee:u64) -> [u8;32]` (keccak-concat + BE `mod r`) + a committed KAT test; `parity-fixtures` uses it to emit the bundle's `extDataHash`.
 
 - [ ] **Step 2: Fixtures emit `extDataHash`**
 
@@ -149,7 +153,7 @@ pub fn verify_withdraw(p: &WithdrawProof, public_inputs: &[[u8; 32]; 3]) -> Resu
     Ok(())
 }
 ```
-Add `PoolError::{ProofMalformed, ProofInvalid}`. A LiteSVM test in Task 3 exercises this end-to-end; a focused unit test here can feed a known-good proof (from `crates/prover`, via a committed test vector) and assert accept + a tampered one asserts reject.
+Add `PoolError::{ProofMalformed, ProofInvalid}`. A LiteSVM test in Task 3 exercises this end-to-end; a focused unit test here generates a real proof **in-test via `prover::prove_withdraw`** (add `prover` + a `circuits/build` build-guard as dev-dependencies, mirroring `prover`'s `ensure_build_artifacts`) and asserts accept, plus a tampered one asserts reject. (Nothing in Task 1 emits a serialized proof, so don't reference a non-existent vector.)
 > **VERIFY AT IMPLEMENTATION TIME:** `Groth16Verifier::new` signature (proof A/B/C sizes; whether `proof.A` must already be negated — Task 1's prover produces the negated BE form; keep it consistent), and the on-chain CU cost of `verify()`.
 
 - [ ] **Step 3–5:** build, run the verifier test (accept real proof / reject tampered), commit `feat(pool-program): on-chain groth16 withdraw verifier + embedded VK`.
@@ -167,9 +171,14 @@ Add `PoolError::{ProofMalformed, ProofInvalid}`. A LiteSVM test in Task 3 exerci
 **Interfaces:**
 - Produces: `initialize_pool(denomination: u64)`, `deposit` enforcing `amount == denomination`, `withdraw(proof, root, nullifier_hash, recipient, relayer, fee)`.
 
-- [ ] **Step 1: Denomination in state + init + deposit**
+- [ ] **Step 1: Denomination in state + init + deposit (+ fix the ripple)**
 
-`Pool` gains `pub denomination: u64` (re-run `offset_of!` checks; adjust `_reserved`/`SPACE` for the new field's alignment — it's `u64`, align 8, place carefully). `initialize_pool` takes + stores `denomination`. `deposit` adds `require!(amount == pool.load()?.denomination, PoolError::WrongDenomination)`.
+`Pool` gains `pub denomination: u64`. **Layout (zero-copy `Pod` rejects implicit padding at compile time):** place `denomination` immediately after `mint` (already 8-aligned at offset 32) so no gap opens; then ensure `size_of::<Pool>()` stays a multiple of 8 by naming any trailing pad explicitly (`_reservedN`), and add `const _: () = assert!(core::mem::size_of::<Pool>() % 8 == 0);`. `offset_of!`-based tests self-adjust, but recompute `SPACE`.
+`initialize_pool` takes + stores `denomination`. `deposit` adds `require!(amount == pool.load()?.denomination, PoolError::WrongDenomination)` — **after** the `ZeroDeposit` check so zero still returns `ZeroDeposit`.
+**Ripple to fix in the SAME step (existing green tests will otherwise break):**
+- Every `setup_pool` helper (`tests/deposit.rs`, `tests/nullifier.rs`, `tests/initialize_pool.rs`) builds `initialize_pool` data with no args → now append `denomination.to_le_bytes()`.
+- `deposit.rs::deposit_moves_lamports_and_advances_tree` deposits `1_000_000` → init that pool with `denomination == 1_000_000`.
+- **New `PoolError` variants (`ProofMalformed`, `ProofInvalid`, `WrongDenomination`, `UnknownRoot`, `FeeExceedsDenomination`) MUST be appended after `TreeFull`** — `deposit.rs` hardcodes `ZeroDeposit=6001`/`CommitmentNotInField=6002` by declaration order; inserting before `TreeFull` silently renumbers them.
 
 - [ ] **Step 2: `withdraw` handler (write failing test)**
 
@@ -179,36 +188,35 @@ pub fn withdraw(
     proof: crate::verifier::WithdrawProof,
     root: [u8; 32],
     nullifier_hash: [u8; 32],
-    recipient: Pubkey,
-    relayer: Pubkey,
-    fee: u64,
+    fee: u64,                       // recipient/relayer are ACCOUNTS, not args (see CRITICAL constraint)
 ) -> Result<()> {
-    // 1. root must be a known historical root
-    {
+    let (denom, vault_bump) = {
         let pool = ctx.accounts.pool.load()?;
         require!(crate::roots::is_known(&pool.roots, &root), PoolError::UnknownRoot);
         require!(fee <= pool.denomination, PoolError::FeeExceedsDenomination);
-    }
-    // 2. recompute extDataHash and verify the proof binds it
-    let ext = crate::verifier::compute_ext_data_hash(&recipient, &relayer, fee); // keccak+reduce, matches SDK/circuit
+        (pool.denomination, pool.vault_bump)
+    };
+    // extDataHash is computed from the PAYOUT ACCOUNT KEYS (binds them to the proof).
+    let ext = ext_data::ext_data_hash(
+        &ctx.accounts.recipient.key(), &ctx.accounts.relayer.key(), fee);
     crate::verifier::verify_withdraw(&proof, &[root, nullifier_hash, ext])?;
-    // 3. single-spend: the `nullifier` PDA is init'd by the Accounts struct (fails if already spent)
-    ctx.accounts.nullifier.spent = true;
-    // 4. payout from the vault: (denomination - fee) -> recipient, fee -> relayer
-    let denom = ctx.accounts.pool.load()?.denomination;
-    let vault_seeds = /* ["vault", pool.key(), &[vault_bump]] */;
-    // system_program::transfer with vault PDA signer (invoke_signed) for denom-fee to recipient, fee to relayer
+    ctx.accounts.nullifier.spent = true; // PDA `init` already enforced single-spend atomically
+    // payout via invoke_signed with the vault PDA seeds: (denom - fee) -> recipient, fee -> relayer
+    let pool_key = ctx.accounts.pool.key();
+    let seeds: &[&[u8]] = &[b"vault", pool_key.as_ref(), &[vault_bump]];
+    // system_program::transfer(..signer=[seeds]..) for (denom - fee) to recipient; and fee to relayer if > 0
     Ok(())
 }
 ```
-`Withdraw` accounts: `pool: AccountLoader<Pool>` (mut), `vault` (mut, PDA), `nullifier` (`init`, seeds `["nullifier", pool, nullifier_hash]`), `recipient` (mut, `SystemAccount`), `relayer` (mut, `SystemAccount`), `payer`/fee-payer (the relayer submits), `system_program`. The nullifier's `init` gives the atomic double-spend guard; a second withdraw with the same `nullifier_hash` fails on the existing PDA.
+`Withdraw` accounts: `pool: AccountLoader<Pool>` (mut), `vault` (mut, system-owned PDA, seeds `["vault", pool]`), `nullifier` (`init`, payer = relayer, seeds `["nullifier", pool, nullifier_hash]` via `#[instruction(.., nullifier_hash: [u8;32])]`), **`recipient` (mut, `SystemAccount`) and `relayer` (mut, `SystemAccount`)** — these keys are what `ext_data_hash` binds, so no separate args, no `address=` needed, no redirection possible; `relayer` doubles as the fee-payer/signer, `system_program`. Second withdraw with the same `nullifier_hash` fails on the existing nullifier PDA.
+> **VERIFY AT IMPLEMENTATION TIME:** vault is system-owned → move lamports OUT with `system_program::transfer` under `invoke_signed` with the `["vault", pool, vault_bump]` seeds (a direct `**lamports.borrow_mut()` debit is impossible for system-owned accounts). Rent-exemption holds: each deposit adds exactly `denom`, each withdraw removes exactly `denom`, never touching the init-time rent seed.
 > **VERIFY AT IMPLEMENTATION TIME:** the vault is a system-owned PDA — to move lamports OUT you either use `invoke_signed(system_transfer, &[vault_seeds])` (vault must be a PDA the System program lets sign) or directly debit/credit `**lamports.borrow_mut()` on the account infos (simpler for program-owned accounts, but the vault is system-owned — use `invoke_signed` with the vault PDA seeds). Reconcile with how `deposit` funds it.
 
-- [ ] **Step 3: Remove standalone `mark_spent`** (its guard now lives in `withdraw`).
+- [ ] **Step 3: Remove standalone `mark_spent`** (its guard now lives in `withdraw`). `tests/nullifier.rs` tests the standalone `mark_spent` (`disc("mark_spent")`, `first_mark_succeeds_second_fails`) — that file will no longer build. **Re-home the double-spend assertion into `tests/withdraw.rs`** (second withdraw with the same `nullifier_hash` must fail on the existing nullifier PDA) rather than just deleting the coverage; delete `tests/nullifier.rs`.
 
 - [ ] **Step 4: LiteSVM test — full happy path + guards**
 
-`tests/withdraw.rs`: init a pool (denomination D), deposit a commitment (from a committed proof fixture whose note is known), then `withdraw` with a **real proof** (generated by `crates/prover` — either at build time or from a committed proof vector) and assert: recipient balance += D-fee, relayer += fee, vault -= D; a second identical withdraw fails (nullifier spent); a withdraw with an unknown `root` fails; a withdraw with a tampered `recipient` (extDataHash mismatch) fails. Prepend a `set_compute_unit_limit` and record the CU.
+`tests/withdraw.rs`: init a pool with denomination `D`. **To make the committed proof valid, reproduce the note bundle's tree EXACTLY: deposit `hash2(111,222)` (the decoy at leaf 0) THEN `hash2(7,9)` (the real note at leaf 1)** — the bundle's `root` (and thus the proof's `root` public input) is the root of that two-leaf tree, so only this order yields `current_root == bundle.root` and puts it in the ring (a single deposit produces a different root and the withdraw can never verify). Then `withdraw` with a **real proof** (from `crates/prover::prove_withdraw` over the bundle, generated in-test like `prover`'s `ensure_build_artifacts`, or a committed proof vector). Assert: recipient += `D-fee`, relayer += `fee`, vault -= `D`; second identical withdraw fails (nullifier spent); unknown `root` fails; a withdraw whose `recipient` account ≠ the bundle's bound recipient fails (extDataHash mismatch → proof rejected). Prepend `set_compute_unit_limit` and record the CU (the `alt_bn128` multi-pairing is heavy).
 > This test depends on `circuits/build/*` + a proof for the deposited note — reuse the `crates/prover` path (serialize a proof to a committed test vector, or generate in a build step guarded like `crates/prover`'s `ensure_build_artifacts`).
 
 - [ ] **Step 5: Commit** `feat(pool-program): withdraw (groth16 verify + root-check + single-spend + denominated payout)`.
@@ -258,10 +266,14 @@ A working, secure single-denomination shielded pool: deposit a note, generate a 
 - **Production trusted-setup ceremony** — hardening (spec §5).
 - **Relayer/coordinator service + gasless UX** — the `withdraw` already supports a relayer paying gas + taking `fee`; the coordinator service is Plan 4.
 
+## Verified sound by the plan review (do NOT re-litigate)
+
+- **proof.A negation:** `groth16-solana` expects a PRE-negated `proof_a`; the prover's `proof_a_to_solana_be` already negates and the on-chain path passes it straight through → no double/under negation, provided the SDK feeds `WithdrawProof.a` from `proof_a_to_solana_be` and the handler does NOT re-negate.
+- **VK struct:** `Groth16Verifyingkey { nr_pubinputs (decorative), vk_alpha_g1:[u8;64], vk_beta_g2/vk_gamme_g2(typo real)/vk_delta_g2:[u8;128], vk_ic:&'static[[u8;64]] }`; `vk_ic` length must be **4** (pubinputs+1); `Groth16Verifier::new` infers `NR_INPUTS=3` from `&[[u8;32];3]`.
+- **`extDataHashSq` dummy constraint** genuinely keeps the signal in the IC binding (front-run-safe once the payout accounts ARE the hashed keys — see the CRITICAL constraint).
+- **Nullifier single-spend**, **root check**, and **vault `invoke_signed`** are the right mechanisms; rent-exemption holds (each deposit +`denom`, each withdraw -`denom`).
+
 ## Open questions / risks
 
-- **`extDataHash` cross-boundary agreement** (circuit input ↔ SDK ↔ on-chain keccak+reduce) is the security crux — pin it with a fixture test in Task 1.
 - **On-chain Groth16 CU cost** — the `alt_bn128` multi-pairing may need a large `set_compute_unit_limit`; measure in Task 3.
-- **`groth16-solana 0.2` on-chain API** (`Groth16Verifyingkey` shape, `Groth16Verifier::new` signature, proof.A negation expectation) — verify against its source at implementation time (Task 5 of Plan 2 already used its verifier off-chain, so the byte format is known-good).
-- **Vault lamport-out mechanism** (system-owned PDA `invoke_signed` vs. direct lamport edit) — reconcile with `deposit`'s funding in Task 3.
-- **zero-copy `Pool` layout change** — adding `denomination: u64` shifts offsets/padding; re-verify `offset_of!`-based tests.
+- **The single `ext_data_hash` + KAT** across `crates/ext-data` / program / SDK is the security crux — the committed KAT fixture is the guard.
