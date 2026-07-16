@@ -6,6 +6,8 @@ pub mod nullifier;
 pub mod poseidon;
 pub mod roots;
 pub mod state;
+pub mod verifier;
+pub mod vk;
 
 use crate::merkle::{empty_root, zeros};
 use crate::state::Pool;
@@ -186,4 +188,8 @@ pub enum PoolError {
     CommitmentNotInField,
     #[msg("merkle tree is full")]
     TreeFull,
+    #[msg("proof bytes are malformed")]
+    ProofMalformed,
+    #[msg("proof failed verification")]
+    ProofInvalid,
 }

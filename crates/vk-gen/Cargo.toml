@@ -1,0 +1,16 @@
+[package]
+name = "vk-gen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Reuses prover's g1_to_solana_be/g2_to_solana_be conversion helpers — the
+# on-chain VK must be encoded in exactly the same byte layout as proofs
+# produced by prover::prove_withdraw, so this crate must not re-derive them.
+prover = { path = "../prover" }
+ark-bn254 = "0.5"
+num-bigint = "0.4"
+serde_json = "1"
+
+[dev-dependencies]
+ark-ec = "0.5"

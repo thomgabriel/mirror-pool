@@ -38,10 +38,20 @@ blake3 = "=1.8.3"
 # `sol_poseidon` syscall (cfg(target_os = "solana")) and a host implementation
 # (ark-bn254 + light-poseidon) used by `cargo test`. Track solana-sdk's "~2.2" line.
 solana-poseidon = "~2.2"
+# On-chain Groth16 verification of the withdraw proof via the `alt_bn128` syscalls
+# (host fallback used by `cargo test`); byte layout must match `crates/prover`'s
+# `proof_a_to_solana_be`/`g1_to_solana_be`/`g2_to_solana_be` and `crates/vk-gen`'s
+# generated `vk.rs` exactly.
+groth16-solana = "0.2"
 
 [dev-dependencies]
 litesvm = "=0.6.1"
 solana-sdk = "~2.2"
+# Generates a real withdraw proof in-test to exercise `verifier::verify_withdraw`
+# end-to-end; see `ensure_build_artifacts` in tests/verifier.rs (mirrors prover's
+# own build guard).
+prover = { path = "../../crates/prover" }
+serde_json = "1"
 
 # anchor-lang's #[program]/#[derive(Accounts)] macros emit cfg(feature = "...") checks
 # for flags anchor-lang owns internally; declare them expected so rustc's check-cfg
