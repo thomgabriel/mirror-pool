@@ -160,6 +160,13 @@ pub mod pool_program {
         Ok(())
     }
 
+    /// Coordinator-independent safety valve: a committed intent's own recipient
+    /// (which must sign — `has_one`) reclaims its deposit while the round is
+    /// still Open. This is a SINGLE-NOTE, non-batch exit — it does NOT provide
+    /// k-anonymity (that is `execute_round`'s batch property); it exists so a
+    /// committed participant's funds can never be locked by a censoring/offline
+    /// coordinator or a round that never reaches `k`. The nullifier stays burned,
+    /// so the reclaimed note can never be re-spent.
     pub fn cancel_intent(
         ctx: Context<CancelIntent>,
         _round_id: u64,
