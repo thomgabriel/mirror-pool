@@ -9,6 +9,7 @@ use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
 use prover::{FieldBytes, WithdrawInputs, TREE_DEPTH};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -22,30 +23,44 @@ fn workspace_root() -> PathBuf {
 /// `circuits/scripts/setup.sh` (circom compile + trusted setup). If they're
 /// missing, run the setup script rather than silently skipping the real
 /// prove/verify this test exists to exercise.
+///
+/// Both `#[test]` functions in this binary call this, and the default test
+/// harness runs them concurrently — without serialization, two threads would
+/// race to spawn `setup.sh` against the same output paths and `circom` would
+/// clobber itself. `OnceLock::get_or_init` runs the closure exactly once and
+/// blocks the other caller until it completes, so the build happens a single
+/// time no matter how many tests need it.
 fn ensure_build_artifacts() -> PathBuf {
-    let circuits_dir = workspace_root().join("circuits");
-    let build_dir = circuits_dir.join("build");
-    let wasm = build_dir.join("withdraw_js").join("withdraw.wasm");
-    let r1cs = build_dir.join("withdraw.r1cs");
-    let zkey = build_dir.join("withdraw.zkey");
-    let vk = build_dir.join("verification_key.json");
-    let required = [&wasm, &r1cs, &zkey, &vk];
+    static BUILD_DIR: OnceLock<PathBuf> = OnceLock::new();
+    BUILD_DIR
+        .get_or_init(|| {
+            let circuits_dir = workspace_root().join("circuits");
+            let build_dir = circuits_dir.join("build");
+            let wasm = build_dir.join("withdraw_js").join("withdraw.wasm");
+            let r1cs = build_dir.join("withdraw.r1cs");
+            let zkey = build_dir.join("withdraw.zkey");
+            let vk = build_dir.join("verification_key.json");
+            let required = [&wasm, &r1cs, &zkey, &vk];
 
-    if !required.iter().all(|p| p.exists()) {
-        eprintln!("circuits/build artifacts missing — running circuits/scripts/setup.sh ...");
-        let status = std::process::Command::new("bash")
-            .arg(circuits_dir.join("scripts").join("setup.sh"))
-            .status();
-        let setup_ran = matches!(status, Ok(s) if s.success());
-        if !setup_ran || !required.iter().all(|p| p.exists()) {
-            panic!(
-                "circuits/build artifacts are missing and `circuits/scripts/setup.sh` did not \
-                 produce them (it needs `circom` and `npx`/`snarkjs` on PATH). \
-                 Run circuits/scripts/setup.sh first, then re-run `cargo test -p prover`."
-            );
-        }
-    }
-    build_dir
+            if !required.iter().all(|p| p.exists()) {
+                eprintln!(
+                    "circuits/build artifacts missing — running circuits/scripts/setup.sh ..."
+                );
+                let status = std::process::Command::new("bash")
+                    .arg(circuits_dir.join("scripts").join("setup.sh"))
+                    .status();
+                let setup_ran = matches!(status, Ok(s) if s.success());
+                if !setup_ran || !required.iter().all(|p| p.exists()) {
+                    panic!(
+                        "circuits/build artifacts are missing and `circuits/scripts/setup.sh` did not \
+                         produce them (it needs `circom` and `npx`/`snarkjs` on PATH). \
+                         Run circuits/scripts/setup.sh first, then re-run `cargo test -p prover`."
+                    );
+                }
+            }
+            build_dir
+        })
+        .clone()
 }
 
 fn decode_be_hex(s: &str) -> FieldBytes {
