@@ -7,6 +7,23 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Only flag unmaintained crates that are our OWN direct dependencies. Every
+# unmaintained advisory in this tree is a deep transitive dep of the Solana SDK
+# or the ark-circom proving stack that we cannot drop (ansi_term, atty, paste,
+# derivative, fxhash, libsecp256k1, bincode, proc-macro-error, ...).
+unmaintained = "workspace"
+# All six are transitive advisories in the CLIENT-SIDE proving/tooling tree
+# (wasmer, ethers-core -> reqwest, solana-sdk). None is reachable from the
+# on-chain custody path (`pool-program` depends on none of them), and none is
+# fixable without an upstream bump. Re-audit on every dependency update.
+ignore = [
+    "RUSTSEC-2024-0344", # curve25519-dalek scalar-sub timing — via wasmer-wasix/solana; not a remote-timing path
+    "RUSTSEC-2022-0093", # ed25519-dalek signing oracle — via solana-vote-program; the misuse API is never called
+    "RUSTSEC-2026-0098", # webpki URI name constraints — via ethers-core -> reqwest; no TLS is performed
+    "RUSTSEC-2026-0099", # webpki wildcard name constraints — via reqwest; no TLS is performed
+    "RUSTSEC-2026-0104", # webpki CRL-parse panic — via reqwest; no TLS is performed
+    "RUSTSEC-2025-0055", # ANSI-escape log poisoning — client-side logging; no untrusted input is logged to a terminal
+]
 
 [licenses]
 version = 2
@@ -32,6 +49,10 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Intra-workspace crates depend on each other by path (e.g. `sdk = { path = ... }`),
+# which resolves to a "*" version. Permit that without weakening the wildcard ban
+# on real registry dependencies.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

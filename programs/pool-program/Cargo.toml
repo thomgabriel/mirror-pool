@@ -3,6 +3,7 @@ name = "pool-program"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+publish = false
 
 # cargo-build-sbf reads [package.metadata.solana] here as authoritative; a
 # [workspace.metadata.solana] pin is only a fallback used when this is absent, so pin

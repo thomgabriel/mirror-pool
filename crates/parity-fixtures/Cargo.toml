@@ -3,6 +3,7 @@ name = "parity-fixtures"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+publish = false
 
 [dependencies]
 pool-program  = { path = "../../programs/pool-program" }   # canonical hash1 + hash2 + merkle

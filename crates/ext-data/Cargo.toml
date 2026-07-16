@@ -3,6 +3,7 @@ name = "ext-data"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+publish = false
 
 [dependencies]
 # The canonical Solana keccak: a syscall on-chain (target_os = "solana"), a plain

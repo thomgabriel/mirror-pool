@@ -3,6 +3,7 @@ name = "sdk"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+publish = false
 
 [dependencies]
 # Canonical Poseidon(2) commitment (`pool_program::poseidon::hash2`) and the
