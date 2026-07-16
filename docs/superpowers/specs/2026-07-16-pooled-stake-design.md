@@ -29,17 +29,17 @@ obscurity* (hide who is accumulating a staking position; uniform actor; fresh un
 authority) — a real step past a withdrawal mixer. It is **not** the copy-trade/front-run
 headline: those are attacks on *trades*, which is the pooled **swap** — deferred here because a
 Jupiter CPI's ~10-20 accounts/intent collapses a single-tx round to k=2-3 (a useless set) until
-a chunked executor exists. Stake is the account-light, byte-uniform first behavioral action;
+a chunked executor exists. Stake is the account-light, uniform-action-shape first behavioral action;
 swap graduates in once the envelope allows.
 
 ### Locked design decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| First behavioral action | **Pooled Stake** (delegate to a fixed validator) | Byte-uniform + ~2 accounts/intent ⇒ a real k survives (~25-28); the spec's named "novel core"; swap/vote deferred |
+| First behavioral action | **Pooled Stake** (delegate to a fixed validator) | Uniform action-shape + ~3 accounts/intent (intent PDA, stake_account PDA, relayer) ⇒ k ≈ 17 (similar to withdraw), a real crowd; the spec's named "novel core"; swap/vote deferred |
 | Circuit | **Reuse the existing withdraw circuit** | `extDataHash` is a generic binding; it binds the *stake* params instead of (recipient/relayer/fee). Zero circuit/VK/trusted-setup work. |
 | Intent model | **Reused as-is** (`{recipient, relayer, fee}`) | For stake, `recipient` = the participant's proof-bound **stake authority**; `fee`→relayer; `denomination − fee` delegated. No intent rewrite. |
-| Action locus | **Per-pool** (a pool is one `action_kind`) | A round must be single-kind for byte-uniformity — a withdraw and a stake in one batch are distinguishable. Simplest: the kind lives on the `Pool`. |
+| Action locus | **Per-pool** (a pool is one `action_kind`) | A round must be single-kind for action-shape uniformity — a withdraw and a stake in one batch are trivially distinguishable. Simplest: the kind lives on the `Pool`. |
 | Validator | **Fixed per pool** (set at `initialize_pool`) | Byte-uniformity + the validator/sysvars become *shared* batch accounts (the account-light win). Per-intent validator would be distinguishable and account-heavy. |
 | Lifecycle | **Delegate-only** | The stake account's authorities = the participant's proof-bound key, so they undelegate/reclaim themselves later. Pooled un-stake + silent reward accrual are the deferred incentive module. |
 | Effective-k harness | **Deferred to Plan 6** | Host-side, pure-Rust, no custody; measures both withdraw and stake rounds. Keeps Plan 5 a single custody-focused deliverable. |
@@ -63,7 +63,7 @@ commit_intent(proof, root, nullifier_hash, fee, round_id)         ← unchanged;
 execute_round(round_id)                                           ← dispatches on pool.action_kind:
         │                                                            Withdraw → WithdrawAction (unchanged)
         │                                                            Stake    → StakeAction  (NEW)
-        ▼   one vault-signed batch, byte-uniform, k-floor-gated
+        ▼   one vault-signed batch, uniform action-shape, k-floor-gated
 ```
 
 ### 2.1 On-chain changes
@@ -110,10 +110,14 @@ generically because the intent shape is action-agnostic.
 
 ### 2.2 Account-envelope budget (verified constraint)
 
-Per stake intent: **~2 unique** accounts (`stake_account` PDA + the `intent` PDA) plus the
-authority/relayer keys, against ~6 fixed + ~6 shared (validator + stake program + config +
-3 sysvars). Round capacity ≈ `(64 − ~12) / ~2 ≈ 25`. This is the whole k-ceiling for a
-single-tx stake round; chunked/paginated execution (raising it) is deferred with the swap.
+Per stake intent: **3 writable accounts** — the `intent` PDA, the `stake_account` PDA, and the
+`relayer` (fee recipient). The **stake/withdraw authority is instruction *data* to Stake
+`Initialize`, not a passed account** (read from the stored `Intent.recipient` and bound via
+`extDataHash`), so it consumes no per-intent slot. Against ~6 fixed (`pool, round, next_round,
+vault, cranker, system_program`) + ~6-7 shared (validator vote account, Stake program, Stake
+config, Clock/StakeHistory/Rent sysvars). Round capacity ≈ `(64 − ~13) / 3 ≈ 17` — the same
+order as withdraw (3/intent), NOT higher. This is the whole k-ceiling for a single-tx stake
+round; chunked/paginated execution (raising it) is deferred with the swap.
 
 ### 2.3 SDK
 
@@ -142,7 +146,9 @@ single-tx stake round; chunked/paginated execution (raising it) is deferred with
 ```
 
 **Guarantees preserved from Plan 4:** k-anonymity by construction on the batch (sub-k rejected
-on-chain); uniform actor (vault is sole signer; byte-uniform delegations to one validator);
+on-chain); uniform actor (vault is sole signer; delegations uniform in validator + amount, with
+fresh unlinkable per-participant authorities/stake-accounts — the same privacy model as withdraw's
+differing-but-unlinkable recipients);
 value conservation (each intent backed 1:1 by a burned nullifier ⇐ a deposit); no
 fund/authority redirection (payout/authority accounts key-matched to the proof-bound `Intent`);
 single-commit + replay closed (nullifier PDA); privacy (no secret/preimage logged).
@@ -154,7 +160,7 @@ single-commit + replay closed (nullifier PDA); privacy (no secret/preimage logge
 | Adversary | Attack | Defense |
 |---|---|---|
 | Clustering on the stake side | Link the *stake account* back to a depositor | Authority `A` is a fresh, ZK-unlinkable key (like `recipient`); the stake account is a pool-derived PDA created uniformly by the vault — no participant-derived seed |
-| Non-uniform batch | Distinguish intents by validator/amount | Fixed validator + fixed denomination ⇒ byte-uniform delegations; a pool is single-action-kind so no withdraw/stake mixing |
+| Non-uniform batch | Distinguish intents by validator/amount | Fixed validator + fixed fee ⇒ every delegation is the same amount to the same validator (only the per-participant stake-account/authority differ, and those are ZK-unlinkable); a pool is single-action-kind so no withdraw/stake mixing |
 | Authority redirection | Steer a stake account's authority to the attacker | `Initialize`'s authority = `intent.recipient`, key-matched against the extDataHash-bound `Intent`; a substituted authority account fails `IntentAccountMismatch` |
 | Sub-k stake round | Fire a thin stake round | Same on-chain k-floor (`meets_k_floor`); `execute_round` rejects below k |
 | Whale self-fill | Satisfy k with own intents | **Unchanged residual** — the k-floor still counts intents, not distinct funders (Plan 6 harness measures it; Sybil-pricing is deferred). Stated honestly, not solved here. |
@@ -176,20 +182,23 @@ single-commit + replay closed (nullifier PDA); privacy (no secret/preimage logge
    nullifier stays burned (note not re-committable).
 4. **Seam regression:** the existing withdraw pool + its full suite stay green — proving
    `execute_round`'s per-kind dispatch didn't regress the withdraw path.
-5. **Value conservation / uniformity asserts:** the emitted batch is byte-uniform across
-   participants (same validator, same delegated amount modulo the per-intent fee — note the fee
-   non-uniformity gap below).
+5. **Value conservation / uniformity asserts:** the delegation *shape* is uniform across
+   participants — same validator, same delegated amount (fee is fixed per pool, §6) — while the
+   per-participant stake-account PDA and authority key necessarily differ but are ZK-unlinkable
+   (assert the delegated amount + validator are identical across intents; do NOT assert byte-
+   identity on the identity fields, which is impossible and not the property we want).
 
 ---
 
 ## 6. Open questions / notes
 
 - **Fee uniformity — LOCKED: stake pools use a fixed per-pool fee.** A free per-intent `fee`
-  would let delegated amounts differ across a round — a byte-uniformity leak the verified
+  would let delegated amounts differ across a round — an amount-uniformity leak the verified
   research flagged. Decision: a **Stake** pool sets its `fee` at `initialize_pool` (a
   `stake_fee: u64` field on the `Pool`, alongside `validator`), and `commit_intent` on a stake
   pool requires the intent's `fee == pool.stake_fee` — so every delegation in a round is
-  `denomination − stake_fee`, strictly byte-uniform. (Withdraw pools keep the existing variable
+  `denomination − stake_fee`, so the delegated *amount* is identical across the round (the
+  per-participant stake-account/authority still differ, and are ZK-unlinkable). (Withdraw pools keep the existing variable
   `fee`; their uniformity is a pre-existing concern out of Plan 5 scope.)
 - **Stake-account rent.** Creating a stake account requires rent-exemption; the vault funds
   `denomination` and the stake account needs the rent-exempt minimum for a stake account —
