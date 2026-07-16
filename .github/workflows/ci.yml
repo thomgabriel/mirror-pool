@@ -12,11 +12,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  ANCHOR_VERSION: "0.31.1"
-  # Local dev builds the SBF program with platform-tools v1.54 (pinned in
-  # programs/pool-program/Cargo.toml's [package.metadata.solana]); cargo-build-sbf
-  # fetches that toolchain automatically. See docs/research/cicd-and-testing.md.
-  SOLANA_VERSION: "2.2.21"
+  # Agave (Solana) CLI version — matches local dev (solana-cli 3.0.1) and must be a
+  # real release tag on release.anza.xyz. It provides `cargo-build-sbf`; the actual
+  # SBF toolchain (platform-tools v1.54) is pinned in programs/pool-program/Cargo.toml's
+  # [package.metadata.solana] and fetched automatically. See docs/research/cicd-and-testing.md.
+  SOLANA_VERSION: "3.0.1"
 
 jobs:
   # ---------- 1. Lint / format (fast, host-only — reliable) ----------
@@ -54,29 +54,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p pool-program --lib --locked
 
-  # ---------- 3. Anchor build + non-proof LiteSVM integration tests ----------
-  # ⚠️ FIRST-RUN VALIDATION NEEDED: this job builds the SBF program (which fetches
-  # platform-tools v1.54 via the manifest pin) and runs the LiteSVM integration tests
-  # that don't need a Groth16 proof (deposit/initialize_pool/scaffold — they only need
-  # the built .so). Local dev uses solana-cli 3.0.1; if setup-anchor's Agave/platform-tools
-  # resolution differs on a fresh runner, adjust SOLANA_VERSION or the setup step here
-  # after watching the first Actions run.
+  # ---------- 3. SBF build + non-proof LiteSVM integration tests ----------
+  # Builds the SBF program with `cargo build-sbf` (which fetches platform-tools v1.54
+  # via the [package.metadata.solana] pin) and runs the LiteSVM integration tests that
+  # don't need a Groth16 proof (deposit/initialize_pool/scaffold — they only load the
+  # built .so). We install the Agave toolchain directly from release.anza.xyz rather
+  # than a third-party setup action; the tests hand-build instructions (no IDL), so the
+  # Anchor CLI is unnecessary. If SOLANA_VERSION drifts from the manifest, adjust it here.
   # The proof-based integration tests (tests/withdraw.rs, tests/verifier.rs) need the
   # circom + ptau ZK toolchain too, so they run in the `zk-tests` job instead — this job
   # stays green without provisioning that toolchain.
   build-test:
-    name: anchor build + non-proof litesvm integration
+    name: build (sbf) + non-proof litesvm integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: metadaoproject/setup-anchor@v3.4
-        with:
-          anchor-version: ${{ env.ANCHOR_VERSION }}
-          solana-cli-version: ${{ env.SOLANA_VERSION }}
-          node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Solana (Agave) toolchain
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
-      - name: Anchor build (SBF)
-        run: anchor build
+      - name: Build SBF program (cargo build-sbf)
+        # LiteSVM loads target/deploy/pool_program.so directly; the tests hand-build
+        # instructions (no IDL), so cargo-build-sbf is sufficient — no Anchor CLI.
+        # platform-tools v1.54 is auto-fetched via [package.metadata.solana].
+        run: cargo build-sbf --manifest-path programs/pool-program/Cargo.toml
       - name: Non-proof test suite (unit + deposit/initialize_pool/scaffold LiteSVM integration)
         run: cargo test -p pool-program --lib --test deposit --test initialize_pool --test scaffold --locked
 
@@ -111,9 +114,9 @@ jobs:
       - name: Byte-compare embedded VK against regenerated verification_key.json
         run: cargo run -p vk-gen -- --check
 
-  # ---------- 4b. ZK proof-based tests (circom + ptau + anchor build) ----------
-  # ⚠️ FIRST-RUN VALIDATION NEEDED: this is the one job that provisions the full
-  # ZK toolchain (circom + pot14 ptau) AND builds the SBF program, because the
+  # ---------- 4b. ZK proof-based tests (circom + ptau + sbf build) ----------
+  # This is the one job that provisions the full ZK toolchain (circom + pot14 ptau)
+  # AND builds the SBF program (via `cargo build-sbf`), because the
   # proof-based tests need both a real Groth16 proof (via circuits/scripts/setup.sh)
   # and the on-chain program (via LiteSVM's `so_path`/`add_program_from_file`).
   # Covers the security-critical proof/verifier paths plus the sdk↔prover↔pool-program
@@ -124,19 +127,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: metadaoproject/setup-anchor@v3.4
-        with:
-          anchor-version: ${{ env.ANCHOR_VERSION }}
-          solana-cli-version: ${{ env.SOLANA_VERSION }}
-          node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Solana (Agave) toolchain
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/install-circom
       - name: npm ci (circuits)
         working-directory: circuits
         run: npm ci
       - uses: ./.github/actions/fetch-ptau
-      - name: Anchor build (SBF)
-        run: anchor build
+      - name: Build SBF program (cargo build-sbf)
+        run: cargo build-sbf --manifest-path programs/pool-program/Cargo.toml
       - name: Generate circuit build artifacts (circom compile + trusted setup)
         run: bash circuits/scripts/setup.sh
       - name: Proof-based pool-program integration tests
