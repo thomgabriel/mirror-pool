@@ -115,26 +115,19 @@ jobs:
         run: cargo run -p vk-gen -- --check
 
   # ---------- 4b. ZK proof-based tests (circom + ptau + sbf build) ----------
-  # This is the one job that provisions the full ZK toolchain (circom + pot14 ptau)
-  # AND builds the SBF program (via `cargo build-sbf`), because the
-  # proof-based tests need both a real Groth16 proof (via circuits/scripts/setup.sh)
-  # and the on-chain program (via LiteSVM's `so_path`/`add_program_from_file`).
-  # Covers the security-critical proof/verifier paths plus the sdk↔prover↔pool-program
-  # end-to-end round trip (crates/sdk/tests/e2e.rs) that was previously not run in CI
-  # at all. Watch the first Actions run in case toolchain versions drift.
+  # Runs on macOS, deliberately. These test binaries link `wasmer` (via ark-circom's
+  # witness calculator, whose 0.5 pin we cannot change), which references the plain
+  # `__rust_probestack` symbol that Rust >= 1.85 no longer exports; on Linux x86_64
+  # (rust-lld) the link fails, but macOS's linker resolves it (rust-lang/rust#142612,
+  # upstream won't-fix — full write-up in docs/research/ci-zk-tests-wasmer-linker.md).
+  # This is the one job that provisions the full ZK toolchain (circom + pot14 ptau) AND
+  # builds the SBF program, because the proof-based tests need both a real Groth16 proof
+  # and the on-chain program via LiteSVM. A durable fix (drop wasmer for a native witness
+  # calculator) would let this return to Linux; until then it runs where it links, as a
+  # real blocking gate.
   zk-tests:
-    name: zk proof tests (withdraw/verifier/prover/sdk)
-    runs-on: ubuntu-latest
-    # KNOWN LINUX-x86_64 LINK FAILURE, non-blocking on purpose. wasmer (pulled by
-    # ark-circom's witness calculator, whose 0.5 pin we cannot change) references the
-    # plain symbol `__rust_probestack`, which every Rust that can build our edition-2024
-    # deps (>= 1.85) no longer exports (it's v0-mangled under `__rustc::`). This is an
-    # upstream incompatibility (rust-lang/rust#142612, closed not_planned) that no linker
-    # flag or toolchain pin resolves. The proof/verify/e2e tests DO run and are validated
-    # locally on macOS. Durable fix = a native witness calculator instead of wasmer (see
-    # docs/research/ci-zk-tests-wasmer-linker.md). Until then this job reports but does
-    # not gate; every OTHER job is a real blocking gate.
-    continue-on-error: true
+    name: zk proof tests (commit/execute/cancel/verifier/prover/sdk)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -152,17 +145,8 @@ jobs:
         run: cargo build-sbf --manifest-path programs/pool-program/Cargo.toml
       - name: Generate circuit build artifacts (circom compile + trusted setup)
         run: bash circuits/scripts/setup.sh
-      # Rust 1.90+ made rust-lld the default linker on x86_64-linux, and rust-lld
-      # leaves wasmer's `__rust_probestack` reference (pulled in via ark-circom's
-      # witness calculator) undefined where GNU ld resolves it (rust-lang/rust#142612).
-      # `-Clinker-features=-lld` is the officially-supported stable opt-out: fall back
-      # to the system linker. Set via $GITHUB_ENV so it applies ONLY to the cargo test
-      # steps below — NOT the `cargo build-sbf` step above, whose sbf target needs its
-      # own lld. env RUSTFLAGS wins over any .cargo/config, so it can't be clobbered.
-      - name: Disable rust-lld for the wasmer test binaries (system ld resolves __rust_probestack)
-        run: echo "RUSTFLAGS=-Clinker-features=-lld" >> "$GITHUB_ENV"
       - name: Proof-based pool-program integration tests
-        run: cargo test -p pool-program --test withdraw --test verifier --locked
+        run: cargo test -p pool-program --test commit_intent --test execute_round --test cancel_intent --test verifier --locked
       - name: Prover unit + integration tests
         run: cargo test -p prover --locked
       - name: SDK unit + e2e round-trip tests

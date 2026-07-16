@@ -31,4 +31,4 @@ runs:
       shell: bash
       run: |
         echo "489be9e5ac65d524f7b1685baac8a183c6e77924fdb73d2b8105e335f277895d  circuits/ptau/pot14_final.ptau" \
-          | sha256sum -c -
+          | shasum -a 256 -c -
