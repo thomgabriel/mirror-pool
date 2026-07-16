@@ -142,11 +142,22 @@ jobs:
         run: cargo build-sbf --manifest-path programs/pool-program/Cargo.toml
       - name: Generate circuit build artifacts (circom compile + trusted setup)
         run: bash circuits/scripts/setup.sh
+      # These test binaries link `wasmer` (via ark-circom's witness generator),
+      # whose `wasmer_vm_probestack` references `__rust_probestack` — a symbol the
+      # default self-contained `rust-lld` fails to resolve but the system linker
+      # does. Opt these HOST builds back to the system linker. Scoped per-step (not
+      # job-level) so it never touches the SBF build above, which requires lld.
       - name: Proof-based pool-program integration tests
+        env:
+          RUSTFLAGS: "-Clink-self-contained=-linker"
         run: cargo test -p pool-program --test withdraw --test verifier --locked
       - name: Prover unit + integration tests
+        env:
+          RUSTFLAGS: "-Clink-self-contained=-linker"
         run: cargo test -p prover --locked
       - name: SDK unit + e2e round-trip tests
+        env:
+          RUSTFLAGS: "-Clink-self-contained=-linker"
         run: cargo test -p sdk --locked
 
   # ---------- 5. Security / supply chain ----------
