@@ -142,14 +142,15 @@ jobs:
         run: cargo build-sbf --manifest-path programs/pool-program/Cargo.toml
       - name: Generate circuit build artifacts (circom compile + trusted setup)
         run: bash circuits/scripts/setup.sh
-      # wasmer (via ark-circom's witness generator) references `__rust_probestack`
-      # from hand-written asm; the linker won't auto-pull it from compiler_builtins,
-      # so force it. Set via $GITHUB_ENV so it applies ONLY to the cargo test steps
-      # below — never the SBF build above (whose linker must stay untouched).
-      # Confirmed locally in a Linux container (the prover test binary links with it,
-      # fails without it).
-      - name: Force-link __rust_probestack for the wasmer test binaries
-        run: echo "RUSTFLAGS=-Clink-arg=-Wl,--undefined=__rust_probestack" >> "$GITHUB_ENV"
+      # Rust 1.90+ made rust-lld the default linker on x86_64-linux, and rust-lld
+      # leaves wasmer's `__rust_probestack` reference (pulled in via ark-circom's
+      # witness calculator) undefined where GNU ld resolves it (rust-lang/rust#142612).
+      # `-Clinker-features=-lld` is the officially-supported stable opt-out: fall back
+      # to the system linker. Set via $GITHUB_ENV so it applies ONLY to the cargo test
+      # steps below — NOT the `cargo build-sbf` step above, whose sbf target needs its
+      # own lld. env RUSTFLAGS wins over any .cargo/config, so it can't be clobbered.
+      - name: Disable rust-lld for the wasmer test binaries (system ld resolves __rust_probestack)
+        run: echo "RUSTFLAGS=-Clinker-features=-lld" >> "$GITHUB_ENV"
       - name: Proof-based pool-program integration tests
         run: cargo test -p pool-program --test withdraw --test verifier --locked
       - name: Prover unit + integration tests
