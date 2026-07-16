@@ -111,8 +111,34 @@ fn render_vk_rs(v: &Value) -> String {
     )
 }
 
-fn main() {
-    let root = workspace_root();
+/// Renders `vk.rs` into a temporary file and runs `rustfmt` over it so the
+/// output byte-matches what `cargo fmt --check` expects of the committed
+/// file, then returns the formatted contents. Used by both generate mode
+/// (written to the real output path) and `--check` mode (compared in memory
+/// without touching the committed file).
+fn render_and_format(v: &Value) -> String {
+    let rendered = render_vk_rs(v);
+
+    let tmp_path = std::env::temp_dir().join(format!("vk-gen-{}.rs", std::process::id()));
+    std::fs::write(&tmp_path, &rendered)
+        .unwrap_or_else(|e| panic!("failed to write temp file {}: {e}", tmp_path.display()));
+
+    let status = std::process::Command::new("rustfmt")
+        .arg(&tmp_path)
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run rustfmt on {}: {e}", tmp_path.display()));
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp_path);
+        panic!("rustfmt failed on {}", tmp_path.display());
+    }
+
+    let formatted = std::fs::read_to_string(&tmp_path)
+        .unwrap_or_else(|e| panic!("failed to read back {}: {e}", tmp_path.display()));
+    let _ = std::fs::remove_file(&tmp_path);
+    formatted
+}
+
+fn load_vk_json(root: &Path) -> Value {
     let vk_json_path = root.join("circuits/build/verification_key.json");
     let raw = std::fs::read_to_string(&vk_json_path).unwrap_or_else(|e| {
         panic!(
@@ -120,26 +146,43 @@ fn main() {
             vk_json_path.display()
         )
     });
-    let v: Value = serde_json::from_str(&raw).expect("valid JSON");
+    serde_json::from_str(&raw).expect("valid JSON")
+}
 
-    let rendered = render_vk_rs(&v);
-
+fn main() {
+    let check_mode = std::env::args().any(|a| a == "--check");
+    let root = workspace_root();
+    let v = load_vk_json(&root);
     let out_path = root.join("programs/pool-program/src/vk.rs");
+
+    if check_mode {
+        let expected = render_and_format(&v);
+        let committed = std::fs::read_to_string(&out_path).unwrap_or_else(|e| {
+            panic!(
+                "failed to read committed {} ({e}) — nothing to check against",
+                out_path.display()
+            )
+        });
+        if expected == committed {
+            println!(
+                "check-vk: {} matches circuits/build/verification_key.json",
+                out_path.display()
+            );
+            return;
+        }
+        eprintln!(
+            "check-vk: DRIFT DETECTED — {} does not match what would be regenerated from \
+             circuits/build/verification_key.json. Run `cargo run -p vk-gen` and commit the \
+             result.",
+            out_path.display()
+        );
+        std::process::exit(1);
+    }
+
+    let rendered = render_and_format(&v);
     std::fs::write(&out_path, rendered).unwrap_or_else(|e| {
         panic!("failed to write {}: {e}", out_path.display());
     });
-
-    // Byte-array literals from `fmt_byte_array` don't match rustfmt's own
-    // wrapping/whitespace, and `cargo fmt --check` must stay clean over the
-    // committed `vk.rs` — run rustfmt on the freshly written file rather than
-    // hand-reproduce its formatting rules here.
-    let status = std::process::Command::new("rustfmt")
-        .arg(&out_path)
-        .status()
-        .unwrap_or_else(|e| panic!("failed to run rustfmt on {}: {e}", out_path.display()));
-    if !status.success() {
-        panic!("rustfmt failed on {}", out_path.display());
-    }
 
     println!("wrote {}", out_path.display());
 }

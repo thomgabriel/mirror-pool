@@ -76,7 +76,38 @@ jobs:
       - name: Full test suite (unit + LiteSVM integration)
         run: cargo test -p pool-program --locked
 
-  # ---------- 4. Security / supply chain ----------
+  # ---------- 4. VK drift guard ----------
+  # ⚠️ FIRST-RUN VALIDATION NEEDED: regenerates circuits/build/verification_key.json
+  # via circuits/scripts/setup.sh (needs the circom compiler + snarkjs/node toolchain)
+  # then byte-compares the embedded on-chain VK (programs/pool-program/src/vk.rs)
+  # against what crates/vk-gen would generate from it. Watch the first Actions run
+  # in case the circom install step needs adjusting for the runner.
+  check-vk:
+    name: check-vk (verifier-key drift guard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: circuits/package-lock.json
+      - name: Install circom 2.1.6
+        # circom is a Rust binary (not an npm package) pinned per docs/superpowers/plans/2026-07-15-circuits.md
+        run: cargo install --git https://github.com/iden3/circom --tag v2.1.6 --locked
+      - name: npm ci (circuits)
+        working-directory: circuits
+        run: npm ci
+      - name: Regenerate verification_key.json
+        run: bash circuits/scripts/setup.sh
+      - name: Byte-compare embedded VK against regenerated verification_key.json
+        run: cargo run -p vk-gen -- --check
+
+  # ---------- 5. Security / supply chain ----------
   supply-chain:
     name: cargo-deny
     runs-on: ubuntu-latest
