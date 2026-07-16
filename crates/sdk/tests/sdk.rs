@@ -93,10 +93,8 @@ fn load_bundle() -> (Note, [u8; 32], MerklePath) {
     assert_eq!(path_elements.len(), sdk::TREE_DEPTH);
     assert_eq!(path_indices.len(), sdk::TREE_DEPTH);
 
-    let note = Note {
-        nullifier: str_field("nullifier"),
-        secret: str_field("secret"),
-    };
+    let note = Note::from_parts(str_field("nullifier"), str_field("secret"))
+        .expect("bundle note fields are in-field BN254 scalars");
     let root = str_field("root");
     let merkle_path = MerklePath {
         elements: path_elements.try_into().unwrap(),

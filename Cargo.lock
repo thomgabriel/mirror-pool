@@ -3800,7 +3800,6 @@ version = "0.1.0"
 dependencies = [
  "ext-data",
  "pool-program",
- "solana-poseidon",
 ]
 
 [[package]]
@@ -4872,7 +4871,6 @@ dependencies = [
  "prover",
  "rand 0.8.7",
  "serde_json",
- "solana-poseidon",
  "solana-sdk",
 ]
 

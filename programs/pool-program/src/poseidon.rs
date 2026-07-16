@@ -41,6 +41,17 @@ pub fn hash2(left: &[u8; 32], right: &[u8; 32]) -> core::result::Result<[u8; 32]
     Ok(h.to_bytes())
 }
 
+/// Circom-compatible BN254 Poseidon over a single field element, big-endian
+/// I/O. Uses the same native Solana `poseidon` syscall as `hash2`.
+pub fn hash1(x: &[u8; 32]) -> core::result::Result<[u8; 32], PoseidonError> {
+    if !is_in_field(x) {
+        return Err(PoseidonError::NotInField);
+    }
+    let h = hashv(Parameters::Bn254X5, Endianness::BigEndian, &[x.as_slice()])
+        .map_err(|_| PoseidonError::HashFailed)?;
+    Ok(h.to_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +90,20 @@ mod tests {
             hash2(&BN254_MODULUS_BE, &[0u8; 32]),
             Err(PoseidonError::NotInField)
         ));
+    }
+
+    #[test]
+    fn hash1_is_deterministic_and_nonzero() {
+        let a = [1u8; 32];
+        let h1 = hash1(&a).unwrap();
+        let h2 = hash1(&a).unwrap();
+        assert_eq!(h1, h2, "Poseidon must be deterministic");
+        assert_ne!(h1, [0u8; 32], "hash of nonzero input must be nonzero");
+    }
+
+    #[test]
+    fn hash1_rejects_out_of_field_input() {
+        let too_big = [0xffu8; 32]; // > BN254 modulus
+        assert!(matches!(hash1(&too_big), Err(PoseidonError::NotInField)));
     }
 }

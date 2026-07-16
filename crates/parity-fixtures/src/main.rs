@@ -1,6 +1,5 @@
 use pool_program::merkle::{empty_root, insert, zeros, TREE_HEIGHT};
-use pool_program::poseidon::hash2;
-use solana_poseidon::{hashv, Endianness, Parameters};
+use pool_program::poseidon::{hash1, hash2};
 
 fn fe(bytes: [u8; 32]) -> [u8; 32] {
     bytes
@@ -16,13 +15,7 @@ fn hex(b: &[u8; 32]) -> String {
 
 /// Canonical nullifier hash — single-input Poseidon, same params as hash2.
 fn nullifier_hash(nullifier: &[u8; 32]) -> [u8; 32] {
-    hashv(
-        Parameters::Bn254X5,
-        Endianness::BigEndian,
-        &[nullifier.as_slice()],
-    )
-    .expect("in-field")
-    .to_bytes()
+    hash1(nullifier).expect("in-field")
 }
 
 fn main() {

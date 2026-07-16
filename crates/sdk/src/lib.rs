@@ -6,9 +6,9 @@
 //! `pool-program` actually checks:
 //!
 //! - `Note::commitment` calls `pool_program::poseidon::hash2` directly.
-//! - `Note::nullifier_hash` calls `solana_poseidon::hashv` with the exact
-//!   arguments `crates/parity-fixtures` (the circuit's own witness source)
-//!   uses for its single-input Poseidon.
+//! - `Note::nullifier_hash` calls `pool_program::poseidon::hash1` directly —
+//!   the same single-input Poseidon `crates/parity-fixtures` (the circuit's
+//!   own witness source) calls.
 //! - `compute_ext_data_hash` is a re-export of `ext_data::ext_data_hash`,
 //!   the one shared implementation `pool-program`'s `withdraw` handler also
 //!   calls.
@@ -21,7 +21,6 @@ use std::path::Path;
 
 use pool_program::poseidon;
 use rand::RngCore;
-use solana_poseidon::{hashv, Endianness, Parameters};
 use solana_sdk::{
     hash::hash as sha256,
     instruction::{AccountMeta, Instruction},
@@ -32,13 +31,25 @@ use solana_sdk::{
 pub use ext_data::ext_data_hash as compute_ext_data_hash;
 pub use prover::{FieldBytes, ProverError, PublicInputs, WithdrawInputs, TREE_DEPTH};
 
+/// Errors from fallible SDK constructors — never a panic path on
+/// attacker/untrusted-influenced input (e.g. a `Note` deserialized from
+/// disk or the network).
+#[derive(Debug, PartialEq, Eq)]
+pub enum SdkError {
+    /// A note field is not a canonical, in-field BN254 scalar
+    /// (`pool_program::poseidon::is_in_field`).
+    NotInField,
+}
+
 /// A shielded note: `commitment = Poseidon2(nullifier, secret)` (the
 /// deposited leaf), spent via `nullifier_hash = Poseidon1(nullifier)` (the
-/// public signal `withdraw` marks as spent).
+/// public signal `withdraw` marks as spent). Fields are private; every
+/// `Note` is guaranteed in-field by construction (`new`/`from_parts`), so
+/// `commitment`/`nullifier_hash` never need to fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Note {
-    pub nullifier: [u8; 32],
-    pub secret: [u8; 32],
+    nullifier: [u8; 32],
+    secret: [u8; 32],
 }
 
 impl Note {
@@ -49,10 +60,28 @@ impl Note {
     /// `pool_program::poseidon::hash2`/`merkle::insert` enforce on the
     /// commitment.
     pub fn new() -> Self {
-        Note {
-            nullifier: random_field_element(),
-            secret: random_field_element(),
+        let nullifier = random_field_element();
+        let secret = random_field_element();
+        Note::from_parts(nullifier, secret)
+            .expect("random_field_element always returns in-field values")
+    }
+
+    /// Builds a `Note` from possibly-untrusted `nullifier`/`secret` bytes
+    /// (e.g. deserialized from JSON), failing closed instead of panicking
+    /// if either is not a canonical in-field BN254 scalar.
+    pub fn from_parts(nullifier: [u8; 32], secret: [u8; 32]) -> Result<Note, SdkError> {
+        if !poseidon::is_in_field(&nullifier) || !poseidon::is_in_field(&secret) {
+            return Err(SdkError::NotInField);
         }
+        Ok(Note { nullifier, secret })
+    }
+
+    pub fn nullifier(&self) -> [u8; 32] {
+        self.nullifier
+    }
+
+    pub fn secret(&self) -> [u8; 32] {
+        self.secret
     }
 
     /// `Poseidon2(nullifier, secret)` — matches
@@ -61,22 +90,16 @@ impl Note {
     /// (`circuits/circom/withdraw.circom`).
     pub fn commitment(&self) -> [u8; 32] {
         poseidon::hash2(&self.nullifier, &self.secret)
-            .expect("Note fields are constructed to be in-field")
+            .expect("Note fields are validated in-field by from_parts")
     }
 
     /// `Poseidon1(nullifier)` — matches the circuit's
     /// `nh.inputs[0] <== nullifier; nh.out === nullifierHash` and
-    /// `crates/parity-fixtures`'s identical `hashv` call. This is the
-    /// public `nullifier_hash` the on-chain `withdraw` handler checks
-    /// against a fresh nullifier PDA for single-spend.
+    /// `crates/parity-fixtures`'s identical `pool_program::poseidon::hash1`
+    /// call. This is the public `nullifier_hash` the on-chain `withdraw`
+    /// handler checks against a fresh nullifier PDA for single-spend.
     pub fn nullifier_hash(&self) -> [u8; 32] {
-        hashv(
-            Parameters::Bn254X5,
-            Endianness::BigEndian,
-            &[self.nullifier.as_slice()],
-        )
-        .expect("Note::nullifier is constructed to be in-field")
-        .to_bytes()
+        poseidon::hash1(&self.nullifier).expect("Note fields are validated in-field by from_parts")
     }
 }
 
@@ -218,8 +241,8 @@ pub fn build_withdraw_ix(
         root,
         nullifier_hash: note.nullifier_hash(),
         ext_data_hash,
-        nullifier: note.nullifier,
-        secret: note.secret,
+        nullifier: note.nullifier(),
+        secret: note.secret(),
         path_elements: merkle_path.elements,
         path_indices: merkle_path.indices,
     };
@@ -283,8 +306,8 @@ mod tests {
     #[test]
     fn note_new_produces_in_field_values() {
         let note = Note::new();
-        assert!(poseidon::is_in_field(&note.nullifier));
-        assert!(poseidon::is_in_field(&note.secret));
+        assert!(poseidon::is_in_field(&note.nullifier()));
+        assert!(poseidon::is_in_field(&note.secret()));
     }
 
     #[test]
@@ -297,21 +320,38 @@ mod tests {
         let note = Note::new();
         assert_eq!(
             note.commitment(),
-            poseidon::hash2(&note.nullifier, &note.secret).unwrap()
+            poseidon::hash2(&note.nullifier(), &note.secret()).unwrap()
+        );
+    }
+
+    /// Real cross-crate agreement check: the SDK's `Note::nullifier_hash()`
+    /// must equal the on-chain program's own `poseidon::hash1` for the same
+    /// nullifier — not a tautology re-deriving the same call.
+    #[test]
+    fn nullifier_hash_agrees_with_pool_program_hash1() {
+        let note = Note::new();
+        assert_eq!(
+            note.nullifier_hash(),
+            pool_program::poseidon::hash1(&note.nullifier()).unwrap()
         );
     }
 
     #[test]
-    fn nullifier_hash_matches_single_input_poseidon_directly() {
-        let note = Note::new();
-        let expected = hashv(
-            Parameters::Bn254X5,
-            Endianness::BigEndian,
-            &[note.nullifier.as_slice()],
-        )
-        .unwrap()
-        .to_bytes();
-        assert_eq!(note.nullifier_hash(), expected);
+    fn from_parts_rejects_out_of_field_nullifier() {
+        let too_big = [0xffu8; 32]; // > BN254 modulus
+        assert_eq!(
+            Note::from_parts(too_big, [1u8; 32]),
+            Err(SdkError::NotInField)
+        );
+    }
+
+    #[test]
+    fn from_parts_rejects_out_of_field_secret() {
+        let too_big = [0xffu8; 32]; // > BN254 modulus
+        assert_eq!(
+            Note::from_parts([1u8; 32], too_big),
+            Err(SdkError::NotInField)
+        );
     }
 
     #[test]

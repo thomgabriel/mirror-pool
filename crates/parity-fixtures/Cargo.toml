@@ -4,6 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pool-program  = { path = "../../programs/pool-program" }   # canonical hash2 + merkle
-solana-poseidon = "~2.2"                                   # single-input Poseidon(1)
+pool-program  = { path = "../../programs/pool-program" }   # canonical hash1 + hash2 + merkle
 ext-data = { path = "../ext-data" }                        # canonical extDataHash (recipient/relayer/fee)

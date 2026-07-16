@@ -15,10 +15,6 @@ ext-data = { path = "../ext-data" }
 # Real Groth16 proof generation for `withdraw` + the on-chain Solana byte
 # encoding of the proof (`proof_a_to_solana_be`/`g1_to_solana_be`/`g2_to_solana_be`).
 prover = { path = "../prover" }
-# Single-input Poseidon(1) for `nullifier_hash` — same params as `hash2`,
-# matching `circuits/circom/poseidon1.circom` (see `crates/parity-fixtures`
-# for the precedent of this exact call).
-solana-poseidon = "~2.2"
 solana-sdk = "~2.2"
 rand = "0.8"
 
