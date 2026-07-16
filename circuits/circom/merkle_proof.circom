@@ -23,4 +23,3 @@ template MerkleProof(depth) {
     }
     root <== cur[depth];
 }
-component main = MerkleProof(20);
