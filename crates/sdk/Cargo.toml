@@ -1,0 +1,26 @@
+[package]
+name = "sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Canonical Poseidon(2) commitment (`pool_program::poseidon::hash2`) and the
+# program's ID/account layouts/instruction types — reused, not re-derived, so
+# the SDK's commitment/nullifier-hash/instruction encoding can never drift
+# from what the on-chain program actually checks.
+pool-program = { path = "../../programs/pool-program" }
+# The single shared extDataHash implementation (also used by `pool-program`
+# and `crates/parity-fixtures`) — re-exported here, never re-derived.
+ext-data = { path = "../ext-data" }
+# Real Groth16 proof generation for `withdraw` + the on-chain Solana byte
+# encoding of the proof (`proof_a_to_solana_be`/`g1_to_solana_be`/`g2_to_solana_be`).
+prover = { path = "../prover" }
+# Single-input Poseidon(1) for `nullifier_hash` — same params as `hash2`,
+# matching `circuits/circom/poseidon1.circom` (see `crates/parity-fixtures`
+# for the precedent of this exact call).
+solana-poseidon = "~2.2"
+solana-sdk = "~2.2"
+rand = "0.8"
+
+[dev-dependencies]
+serde_json = "1"

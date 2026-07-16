@@ -4864,6 +4864,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdk"
+version = "0.1.0"
+dependencies = [
+ "ext-data",
+ "pool-program",
+ "prover",
+ "rand 0.8.7",
+ "serde_json",
+ "solana-poseidon",
+ "solana-sdk",
+]
+
+[[package]]
 name = "seahash"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
