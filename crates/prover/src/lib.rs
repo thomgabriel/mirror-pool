@@ -31,6 +31,7 @@ pub type FieldBytes = [u8; 32];
 pub struct WithdrawInputs {
     pub root: FieldBytes,
     pub nullifier_hash: FieldBytes,
+    pub ext_data_hash: FieldBytes,
     pub nullifier: FieldBytes,
     pub secret: FieldBytes,
     pub path_elements: [FieldBytes; TREE_DEPTH],
@@ -38,18 +39,23 @@ pub struct WithdrawInputs {
 }
 
 /// The circuit's public signals, in the order declared by
-/// `component main {public [root, nullifierHash]}` — this is also the order
-/// `ark_groth16::Groth16::verify_proof` expects them in.
+/// `component main {public [root, nullifierHash, extDataHash]}` — this is
+/// also the order `ark_groth16::Groth16::verify_proof` expects them in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicInputs {
     pub root: FieldBytes,
     pub nullifier_hash: FieldBytes,
+    pub ext_data_hash: FieldBytes,
 }
 
 impl PublicInputs {
     /// Public signals as field elements, in circuit declaration order.
-    pub fn as_fr(&self) -> [Fr; 2] {
-        [be_to_fr(&self.root), be_to_fr(&self.nullifier_hash)]
+    pub fn as_fr(&self) -> [Fr; 3] {
+        [
+            be_to_fr(&self.root),
+            be_to_fr(&self.nullifier_hash),
+            be_to_fr(&self.ext_data_hash),
+        ]
     }
 }
 
@@ -62,7 +68,7 @@ pub enum ProverError {
     Zkey(String),
     /// `ark-groth16` proof generation failed.
     Synthesis(String),
-    /// The witness didn't expose the two expected public signals.
+    /// The witness didn't expose the three expected public signals.
     UnexpectedPublicInputCount(usize),
 }
 
@@ -74,7 +80,10 @@ impl fmt::Display for ProverError {
             ProverError::Zkey(e) => write!(f, "zkey read error: {e}"),
             ProverError::Synthesis(e) => write!(f, "groth16 proving error: {e}"),
             ProverError::UnexpectedPublicInputCount(n) => {
-                write!(f, "expected 2 public inputs (root, nullifierHash), got {n}")
+                write!(
+                    f,
+                    "expected 3 public inputs (root, nullifierHash, extDataHash), got {n}"
+                )
             }
         }
     }
@@ -119,7 +128,10 @@ fn fr_to_circom_bigint(bytes: &FieldBytes) -> BigInt {
 /// `circuits/build/withdraw.r1cs`; `zkey_path` is `circuits/build/withdraw.zkey`.
 /// Returns the proof plus the public signals the witness actually computed
 /// (bound to `inputs.root`/`inputs.nullifier_hash` by the circuit's `===`
-/// constraints, so they match unless the witness itself was rejected).
+/// constraints, so they match unless the witness itself was rejected;
+/// `inputs.ext_data_hash` is only squared, not constrained, so it always
+/// passes through unchanged — that's what lets it bind an arbitrary
+/// recipient/relayer/fee hash into the proof).
 pub fn prove_withdraw(
     wasm_path: impl AsRef<Path>,
     r1cs_path: impl AsRef<Path>,
@@ -139,6 +151,7 @@ pub fn prove_withdraw(
 
     builder.push_input("root", fr_to_circom_bigint(&inputs.root));
     builder.push_input("nullifierHash", fr_to_circom_bigint(&inputs.nullifier_hash));
+    builder.push_input("extDataHash", fr_to_circom_bigint(&inputs.ext_data_hash));
     builder.push_input("nullifier", fr_to_circom_bigint(&inputs.nullifier));
     builder.push_input("secret", fr_to_circom_bigint(&inputs.secret));
     for elem in &inputs.path_elements {
@@ -155,7 +168,7 @@ pub fn prove_withdraw(
     let public_signals = circuit
         .get_public_inputs()
         .ok_or(ProverError::UnexpectedPublicInputCount(0))?;
-    if public_signals.len() != 2 {
+    if public_signals.len() != 3 {
         return Err(ProverError::UnexpectedPublicInputCount(
             public_signals.len(),
         ));
@@ -163,6 +176,7 @@ pub fn prove_withdraw(
     let public_inputs = PublicInputs {
         root: fr_to_be(public_signals[0]),
         nullifier_hash: fr_to_be(public_signals[1]),
+        ext_data_hash: fr_to_be(public_signals[2]),
     };
 
     let mut zkey_file = File::open(zkey_path)?;

@@ -103,9 +103,18 @@ fn main() {
                 .map(|b| b.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
+
+            // Example payout accounts for the withdraw's extDataHash binding
+            // (arbitrary but fixed, so the fixture is reproducible).
+            let recipient = [0x11u8; 32];
+            let relayer = [0x22u8; 32];
+            let fee: u64 = 1_000;
+            let ext_data_hash = ext_data::ext_data_hash(&recipient, &relayer, fee);
+
             println!(
-                "{{\"nullifier\":\"{}\",\"secret\":\"{}\",\"commitment\":\"{}\",\"nullifierHash\":\"{}\",\"root\":\"{}\",\"pathElements\":[\"{}\"],\"pathIndices\":[{}]}}",
-                hex(&nullifier), hex(&secret), hex(&commitment), hex(&nh), hex(&root), pe, pi
+                "{{\"nullifier\":\"{}\",\"secret\":\"{}\",\"commitment\":\"{}\",\"nullifierHash\":\"{}\",\"root\":\"{}\",\"pathElements\":[\"{}\"],\"pathIndices\":[{}],\"recipient\":\"{}\",\"relayer\":\"{}\",\"fee\":{},\"extDataHash\":\"{}\"}}",
+                hex(&nullifier), hex(&secret), hex(&commitment), hex(&nh), hex(&root), pe, pi,
+                hex(&recipient), hex(&relayer), fee, hex(&ext_data_hash)
             );
         }
         Some(other) => {

@@ -5,10 +5,17 @@ include "merkle_proof.circom";
 template Withdraw(depth) {
     signal input root;                 // public
     signal input nullifierHash;        // public
+    signal input extDataHash;          // public — binds recipient/relayer/fee (hash computed off-circuit)
     signal input nullifier;            // private
     signal input secret;               // private
     signal input pathElements[depth];  // private
     signal input pathIndices[depth];   // private
+
+    // Bind extDataHash into the proof without constraining its value (Tornado pattern):
+    // a nonzero-degree constraint forces the compiler to keep the signal, so the proof
+    // is bound to this exact public input; any change invalidates verification.
+    signal extDataHashSq;
+    extDataHashSq <== extDataHash * extDataHash;
 
     component cm = Poseidon(2);         // commitment = Poseidon(nullifier, secret)
     cm.inputs[0] <== nullifier; cm.inputs[1] <== secret;
@@ -21,4 +28,4 @@ template Withdraw(depth) {
     for (var i = 0; i < depth; i++) { mp.pathElements[i] <== pathElements[i]; mp.pathIndices[i] <== pathIndices[i]; }
     mp.root === root;
 }
-component main {public [root, nullifierHash]} = Withdraw(20);
+component main {public [root, nullifierHash, extDataHash]} = Withdraw(20);

@@ -98,6 +98,7 @@ fn load_bundle() -> WithdrawInputs {
     WithdrawInputs {
         root: str_field("root"),
         nullifier_hash: str_field("nullifierHash"),
+        ext_data_hash: str_field("extDataHash"),
         nullifier: str_field("nullifier"),
         secret: str_field("secret"),
         path_elements: path_elements.try_into().unwrap(),
@@ -169,10 +170,13 @@ fn real_proof_verifies_and_rejects_a_tampered_public_input() {
     .expect("proving the committed note bundle must succeed");
 
     // The witness's own public outputs must match the bundle's committed
-    // root/nullifierHash — the circuit's `===` constraints guarantee this,
-    // but assert it directly so a future circuit change can't silently drift.
+    // root/nullifierHash/extDataHash — the circuit's constraints (`===` for
+    // the first two, the extDataHashSq dummy square for the third) guarantee
+    // this, but assert it directly so a future circuit change can't silently
+    // drift.
     assert_eq!(public_inputs.root, bundle.root);
     assert_eq!(public_inputs.nullifier_hash, bundle.nullifier_hash);
+    assert_eq!(public_inputs.ext_data_hash, bundle.ext_data_hash);
 
     let vk = load_verification_key(&build_dir.join("verification_key.json"));
     let pvk = ark_groth16::prepare_verifying_key(&vk);
@@ -193,6 +197,18 @@ fn real_proof_verifies_and_rejects_a_tampered_public_input() {
     assert!(
         !forged_verified,
         "a proof must NOT verify against a tampered public nullifierHash"
+    );
+
+    // Tamper: flip a bit of extDataHash — this is the recipient/relayer/fee
+    // binding the whole point of this task adds; it must reject just as hard
+    // as a forged nullifierHash.
+    let mut forged_ext = public_inputs.clone();
+    forged_ext.ext_data_hash[31] ^= 0x01;
+    let forged_ext_verified = Groth16::<Bn254>::verify_proof(&pvk, &proof, &forged_ext.as_fr())
+        .expect("verify_proof itself must not error on a mismatched public input");
+    assert!(
+        !forged_ext_verified,
+        "a proof must NOT verify against a tampered public extDataHash"
     );
 }
 
@@ -226,7 +242,7 @@ fn real_proof_verifies_against_the_groth16_solana_on_chain_byte_format() {
         .collect();
 
     let solana_vk = Groth16Verifyingkey {
-        nr_pubinputs: 2,
+        nr_pubinputs: 3,
         vk_alpha_g1,
         vk_beta_g2,
         vk_gamme_g2: vk_gamma_g2,
@@ -234,7 +250,11 @@ fn real_proof_verifies_against_the_groth16_solana_on_chain_byte_format() {
         vk_ic: &vk_ic,
     };
 
-    let public_inputs_be: [[u8; 32]; 2] = [public_inputs.root, public_inputs.nullifier_hash];
+    let public_inputs_be: [[u8; 32]; 3] = [
+        public_inputs.root,
+        public_inputs.nullifier_hash,
+        public_inputs.ext_data_hash,
+    ];
 
     let mut verifier =
         Groth16Verifier::new(&proof_a, &proof_b, &proof_c, &public_inputs_be, &solana_vk)
@@ -258,5 +278,21 @@ fn real_proof_verifies_against_the_groth16_solana_on_chain_byte_format() {
     assert!(
         forged_verifier.verify().is_err(),
         "the on-chain byte-format verifier must reject a tampered public nullifierHash"
+    );
+
+    // Tamper the extDataHash public input the same way.
+    let mut forged_ext_public_inputs_be = public_inputs_be;
+    forged_ext_public_inputs_be[2][31] ^= 0x01;
+    let mut forged_ext_verifier = Groth16Verifier::new(
+        &proof_a,
+        &proof_b,
+        &proof_c,
+        &forged_ext_public_inputs_be,
+        &solana_vk,
+    )
+    .expect("well-formed proof/VK byte lengths");
+    assert!(
+        forged_ext_verifier.verify().is_err(),
+        "the on-chain byte-format verifier must reject a tampered public extDataHash"
     );
 }

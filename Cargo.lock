@@ -2132,6 +2132,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-data"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "eyre"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3791,6 +3798,7 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 name = "parity-fixtures"
 version = "0.1.0"
 dependencies = [
+ "ext-data",
  "pool-program",
  "solana-poseidon",
 ]

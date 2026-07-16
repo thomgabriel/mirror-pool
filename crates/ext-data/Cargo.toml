@@ -1,0 +1,12 @@
+[package]
+name = "ext-data"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# The canonical Solana keccak: a syscall on-chain (target_os = "solana"), a plain
+# software implementation on host — same digest either way, so this crate produces
+# byte-identical output in `parity-fixtures`/the SDK (host) and `pool-program` (SBF)
+# without needing two implementations to stay in sync. Not anchor-lang: this crate
+# has no anchor dependency, matching the plan's shared-crate constraint.
+solana-program = "2.2"

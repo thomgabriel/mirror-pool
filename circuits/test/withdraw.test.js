@@ -9,6 +9,7 @@ describe("Withdraw circuit: Merkle membership + nullifier derivation", () => {
   const input = () => ({
     root: beHexToDec(v.root),
     nullifierHash: beHexToDec(v.nullifierHash),
+    extDataHash: beHexToDec(v.extDataHash),
     nullifier: beHexToDec(v.nullifier),
     secret: beHexToDec(v.secret),
     pathElements: v.pathElements.map(beHexToDec),
@@ -47,5 +48,12 @@ describe("Withdraw circuit: Merkle membership + nullifier derivation", () => {
       threw = true;
     }
     if (!threw) throw new Error("expected witness calculation to reject a corrupted Merkle path, but it succeeded");
+  });
+
+  it("accepts any extDataHash value (bound into the proof, not constrained in-circuit)", async () => {
+    const changed = input();
+    changed.extDataHash = beHexToDec("0".repeat(63) + "1");
+    const w = await circuit.calculateWitness(changed, true);
+    await circuit.checkConstraints(w);
   });
 });
