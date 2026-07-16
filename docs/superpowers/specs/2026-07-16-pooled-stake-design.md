@@ -38,7 +38,7 @@ swap graduates in once the envelope allows.
 |---|---|---|
 | First behavioral action | **Pooled Stake** (delegate to a fixed validator) | Uniform action-shape + ~3 accounts/intent (intent PDA, stake_account PDA, relayer) ⇒ k ≈ 17 (similar to withdraw), a real crowd; the spec's named "novel core"; swap/vote deferred |
 | Circuit | **Reuse the existing withdraw circuit** | `extDataHash` is a generic binding; it binds the *stake* params instead of (recipient/relayer/fee). Zero circuit/VK/trusted-setup work. |
-| Intent model | **Reused as-is** (`{recipient, relayer, fee}`) | For stake, `recipient` = the participant's proof-bound **stake authority**; `fee`→relayer; `denomination − fee` delegated. No intent rewrite. |
+| Intent model | **Reused as-is** (`{recipient, relayer, fee}`) | For stake, `recipient` = the participant's proof-bound **stake authority**; `fee`→relayer; `denomination − fee − stake_rent` delegated (§6). No intent rewrite. |
 | Action locus | **Per-pool** (a pool is one `action_kind`) | A round must be single-kind for action-shape uniformity — a withdraw and a stake in one batch are trivially distinguishable. Simplest: the kind lives on the `Pool`. |
 | Validator | **Fixed per pool** (set at `initialize_pool`) | Byte-uniformity + the validator/sysvars become *shared* batch accounts (the account-light win). Per-intent validator would be distinguishable and account-heavy. |
 | Lifecycle | **Delegate-only** | The stake account's authorities = the participant's proof-bound key, so they undelegate/reclaim themselves later. Pooled un-stake + silent reward accrual are the deferred incentive module. |
@@ -79,17 +79,27 @@ explicit padding to preserve the no-implicit-padding invariant (bytemuck `Pod`) 
 
 **`action.rs` — the seam made real.**
 - `ActionKind { Withdraw, Stake }` (Stake is the new variant, appended).
-- `StakeAction` impl of `PooledAction`: vault-signed, per intent —
+- `StakeAction` impl of `PooledAction`: vault-signed, per intent — **4 CPIs**, ordered so the
+  vault can act unilaterally (the participant's key is never present at execute):
   1. `SystemProgram::CreateAccount` for a program-derived **stake account** PDA
      (`["stake", pool, nullifier_hash]`), sized/rent-funded for a stake account, owned by the
-     Stake program (created via `create_account` with `owner = stake::program::ID`);
-  2. `StakeProgram::Initialize` with **stake & withdraw authority = `intent.recipient`** (the
-     participant's fresh, proof-bound key) and a `Lockup::default()`;
-  3. `StakeProgram::DelegateStake` to the pool's `validator`;
-  4. `fee → relayer` (as in withdraw).
-  Amount delegated = `denomination − fee` (the deposited note's value, less the relayer fee),
-  via funding the stake account from the vault at creation. `split_payout` (reused) keeps the
-  arithmetic fail-closed.
+     Stake program (`create_account` with `owner = stake::program::ID`) — vault signs as funder
+     and the PDA signs for itself via its seeds.
+  2. `StakeProgram::Initialize` with **staker = the VAULT PDA**, **withdrawer = `intent.recipient`**
+     (the participant's fresh, proof-bound key), `Lockup::default()`. The vault holds the *staker*
+     authority initially — **required**, because `DelegateStake` demands the staker *sign*, and only
+     the vault is present; the participant holds *withdraw* from t=0.
+  3. `StakeProgram::DelegateStake` to the pool's `validator` — the **vault signs as the staker**.
+  4. `StakeProgram::Authorize(StakerAuthorize: VAULT → intent.recipient)` — the vault signs and
+     hands staking control to the participant, who now holds **both** authorities (staker +
+     withdrawer). `Authorize` needs only `[stake, clock, current-authority]` — all already present —
+     so it adds **no new per-intent account slots**; k ≈ 17 holds.
+  5. `fee → relayer` (as in withdraw).
+  Amount delegated = `denomination − fee − stake_rent` (the note's value, less the relayer fee,
+  less the stake account's own rent-exemption, which is locked in the account and recoverable when
+  the participant later closes it). `split_payout` (reused) keeps the arithmetic fail-closed. **The
+  delegated amount MUST clear the Stake program's minimum delegation** (see §6 — a hard validity
+  precondition on the pool's denomination bucket).
 
 **`execute_round` (lib.rs).** Read `pool.action_kind`; dispatch each intent to the matching
 `PooledAction`. The `remaining_accounts` layout is **per-kind**:
@@ -138,8 +148,9 @@ round; chunked/paginated execution (raising it) is deferred with the swap.
 ③ COMMIT   client proves note ownership; extDataHash binds (stake_authority A, relayer R, fee f);
            submit {proof, N, A, R, f} → records Intent, burns nullifier (unchanged)
 ④ FORM     round accumulates intents until ≥ k (unchanged; k-floor on-chain)
-⑤ EXECUTE  pool-program, one vault-signed tx: for each intent — create stake_account PDA,
-   (chain) Initialize(authority = A), DelegateStake → V, pay f → R. "The pool staked k×(D−f) to V."
+⑤ EXECUTE  pool-program, one vault-signed tx: for each intent — create stake_account PDA;
+   (chain) Initialize(staker=VAULT, withdrawer=A); DelegateStake → V (vault signs as staker);
+           Authorize(staker: VAULT→A); pay f → R. "The pool staked k×(D−f−rent) to V."
 ⑥ SETTLE   participant holds authority A over their stake account; can undelegate/withdraw later
            (self-service, outside the pool). Reward accrual = deferred incentive module.
 ⑦ CANCEL   (while Open) authority A reclaims D via cancel_intent; nullifier stays burned (unchanged)
@@ -161,7 +172,7 @@ single-commit + replay closed (nullifier PDA); privacy (no secret/preimage logge
 |---|---|---|
 | Clustering on the stake side | Link the *stake account* back to a depositor | Authority `A` is a fresh, ZK-unlinkable key (like `recipient`); the stake account is a pool-derived PDA created uniformly by the vault — no participant-derived seed |
 | Non-uniform batch | Distinguish intents by validator/amount | Fixed validator + fixed fee ⇒ every delegation is the same amount to the same validator (only the per-participant stake-account/authority differ, and those are ZK-unlinkable); a pool is single-action-kind so no withdraw/stake mixing |
-| Authority redirection | Steer a stake account's authority to the attacker | `Initialize`'s authority = `intent.recipient`, key-matched against the extDataHash-bound `Intent`; a substituted authority account fails `IntentAccountMismatch` |
+| Authority redirection | Steer a stake account's authority to the attacker | Both authorities end at `intent.recipient` (withdrawer at `Initialize`, staker via `Authorize`), read from the stored `Intent` and bound in the proof via `extDataHash` — not an execute-time account the cranker supplies, so it can't be substituted without a fresh proof (which the attacker can't produce for someone else's note) |
 | Sub-k stake round | Fire a thin stake round | Same on-chain k-floor (`meets_k_floor`); `execute_round` rejects below k |
 | Whale self-fill | Satisfy k with own intents | **Unchanged residual** — the k-floor still counts intents, not distinct funders (Plan 6 harness measures it; Sybil-pricing is deferred). Stated honestly, not solved here. |
 
@@ -200,10 +211,23 @@ single-commit + replay closed (nullifier PDA); privacy (no secret/preimage logge
   `denomination − stake_fee`, so the delegated *amount* is identical across the round (the
   per-participant stake-account/authority still differ, and are ZK-unlinkable). (Withdraw pools keep the existing variable
   `fee`; their uniformity is a pre-existing concern out of Plan 5 scope.)
-- **Stake-account rent.** Creating a stake account requires rent-exemption; the vault funds
-  `denomination` and the stake account needs the rent-exempt minimum for a stake account —
-  confirm the deposited `denomination` covers `stake_rent + delegated_amount` or adjust the
-  bucket. (Plan-writing task will pin the exact lamport math.)
+- **Denomination validity — LOCKED constraint (rent + minimum-delegation are one decision).** The
+  vault funds the stake account from the deposit, so the value splits three ways:
+  `denomination = stake_fee + stake_rent + delegated_amount`, i.e. **`delegated_amount =
+  denomination − stake_fee − stake_rent`** (this supersedes the earlier "delegated = D − fee";
+  §2.1/§3 are corrected to match). Two hard floors apply: `stake_rent` = the rent-exempt minimum
+  for a stake account (fixed size, `Rent::minimum_balance(StakeStateV2::size_of())`), and
+  `delegated_amount` **must be ≥ the Stake program's minimum delegation** (`get_minimum_delegation()`
+  — currently 1 SOL on mainnet) or `DelegateStake` rejects. So a Stake pool is valid only if
+  `denomination − stake_fee − stake_rent ≥ min_delegation`; `initialize_pool` enforces this
+  (fail-closed) for `action_kind = Stake`. The plan pins the exact lamport constants; the *design
+  constraint* is fixed here (no longer an open question).
+- **Threat-model residual (nullifier-bound position).** The stake PDA is seeded by the public
+  `nullifier_hash`, so the on-chain staking position is permanently bound to `N`. This does **not**
+  leak the deposit (`N` is ZK-unlinkable to the note), but a participant who later undelegates /
+  withdraws from a *doxxed* wallet links their identity → the position → `N`. Same class as the
+  whale-self-fill residual (§4): an honest, stated tradeoff of the delegate-only, self-service exit,
+  not a defect. Mitigations (fresh withdraw destination; a future pooled un-stake) are deferred.
 - **Effective-k (Plan 6).** This spec does not build the harness; it ensures the stake round is
   *measurable* by it (single-action-kind, uniform, k-floor-gated).
 
