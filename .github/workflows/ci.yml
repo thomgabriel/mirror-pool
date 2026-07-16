@@ -83,13 +83,16 @@ jobs:
       - name: Non-proof test suite (unit + deposit/initialize_pool/scaffold LiteSVM integration)
         run: cargo test -p pool-program --lib --test deposit --test initialize_pool --test scaffold --locked
 
-  # ---------- 4. VK drift guard ----------
+  # ---------- 4. Circuit tests + VK drift guard ----------
   # Regenerates circuits/build/verification_key.json via circuits/scripts/setup.sh
   # (needs circom + snarkjs/node + the pot14 ptau fetched below), then byte-compares
   # the embedded on-chain VK (programs/pool-program/src/vk.rs) against what
   # crates/vk-gen would regenerate from it.
+  # The circom test suite runs here too: it needs the same circom + compiled circuit and
+  # does NOT link wasmer, so unlike zk-tests it runs on Linux. It is the gate on the
+  # circom<->on-chain Poseidon/Merkle byte-parity that every proof's meaning rests on.
   check-vk:
-    name: check-vk (verifier-key drift guard)
+    name: circuit tests + check-vk (verifier-key drift guard)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -109,20 +112,28 @@ jobs:
       - uses: ./.github/actions/fetch-ptau
       - name: Regenerate verification_key.json
         run: bash circuits/scripts/setup.sh
+      - name: Circuit tests (Poseidon/Merkle parity vs on-chain + withdraw membership/nullifier)
+        working-directory: circuits
+        run: npm test
       - name: Byte-compare embedded VK against regenerated verification_key.json
         run: cargo run -p vk-gen -- --check
 
   # ---------- 4b. ZK proof-based tests (circom + ptau + sbf build) ----------
-  # Runs on macOS, deliberately. These test binaries link `wasmer` (via ark-circom's
-  # witness calculator, whose 0.5 pin we cannot change), which references the plain
-  # `__rust_probestack` symbol that Rust >= 1.85 no longer exports; on Linux x86_64
-  # (rust-lld) the link fails, but macOS's linker resolves it (rust-lang/rust#142612,
-  # upstream won't-fix — full write-up in docs/research/ci-zk-tests-wasmer-linker.md).
-  # This is the one job that provisions the full ZK toolchain (circom + pot14 ptau) AND
-  # builds the SBF program, because the proof-based tests need both a real Groth16 proof
-  # and the on-chain program via LiteSVM. A durable fix (drop wasmer for a native witness
-  # calculator) would let this return to Linux; until then it runs where it links, as a
-  # real blocking gate.
+  # macOS is the ONLY runner this job can use — forced by two constraints intersecting:
+  #   1. Needs ARM. These binaries link `wasmer` (via ark-circom's witness calculator,
+  #      whose 0.5 pin we cannot change), which references the PLAIN `__rust_probestack`.
+  #      Rust exports that intrinsic only v0-mangled (`__rustc::__rust_probestack`), so on
+  #      x86_64 the reference is undefined and the link fails — no linker flag and no
+  #      toolchain pin fixes it (rust-lang/rust#142612, upstream won't-fix). It is an
+  #      x86-ONLY intrinsic, so on ARM it is neither provided nor referenced: link succeeds.
+  #   2. Needs an Agave CLI (for `cargo-build-sbf`). Anza publishes no aarch64-linux build
+  #      (release.anza.xyz .../solana-release-aarch64-unknown-linux-gnu.tar.bz2 -> 404), so
+  #      ubuntu-*-arm cannot install the toolchain at all.
+  #   ARM AND an Agave build intersect only at aarch64-apple-darwin => macos-latest.
+  # It's also the one job provisioning the full ZK toolchain (circom + pot14 ptau) AND
+  # building the SBF program, since the proof tests need a real Groth16 proof plus the
+  # on-chain program via LiteSVM. Durable fix: drop wasmer for a native witness calculator
+  # — that removes constraint 1 and lets this job return to x86 Linux.
   zk-tests:
     name: zk proof tests (commit/execute/cancel/verifier/prover/sdk)
     runs-on: macos-latest

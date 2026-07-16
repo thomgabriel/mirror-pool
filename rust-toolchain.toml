@@ -1,8 +1,12 @@
 # Pin the whole workspace (local dev AND CI) to one Rust toolchain, so builds are
-# reproducible and `@stable` can't drift lints or drop symbols under us. 1.97+
-# removed the `__rust_probestack` compiler-builtin that wasmer (via ark-circom's
-# witness generator) still references, which broke the proof-based test link in CI;
-# 1.92.0 matches local dev and provides it. Bump deliberately, not by floating.
+# reproducible and `@stable` can't drift lints under us. Bump deliberately, not by floating.
+#
+# This pin does NOT fix the wasmer `__rust_probestack` link break, and must not be relied on
+# for it: 1.92.0 exports that intrinsic only v0-mangled (`__rustc::__rust_probestack`), never
+# under the plain name wasmer references — verified with `nm` against the
+# x86_64-unknown-linux-gnu sysroot — so x86_64 fails to link at any toolchain version. The
+# intrinsic is x86-only, which is why the zk-tests job runs on ARM; see the reasoning in
+# .github/workflows/ci.yml.
 [toolchain]
 channel = "1.92.0"
 components = ["rustfmt", "clippy"]
