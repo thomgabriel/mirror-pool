@@ -109,74 +109,6 @@ pub mod pool_program {
         Ok(())
     }
 
-    pub fn withdraw(
-        ctx: Context<Withdraw>,
-        proof: crate::verifier::WithdrawProof,
-        root: [u8; 32],
-        nullifier_hash: [u8; 32],
-        fee: u64,
-    ) -> Result<()> {
-        let (denomination, vault_bump) = {
-            let pool = ctx.accounts.pool.load()?;
-            require!(
-                crate::roots::is_known(&pool.roots, &root),
-                PoolError::UnknownRoot
-            );
-            require!(fee <= pool.denomination, PoolError::FeeExceedsDenomination);
-            (pool.denomination, pool.vault_bump)
-        };
-
-        // extDataHash is computed from the PAYOUT ACCOUNT KEYS (the accounts that
-        // actually receive lamports below) — NOT from separate instruction args —
-        // so the bound pubkeys are the payout accounts by construction; no
-        // redirection is possible without invalidating the proof.
-        let ext = ext_data::ext_data_hash(
-            &ctx.accounts.recipient.key().to_bytes(),
-            &ctx.accounts.relayer.key().to_bytes(),
-            fee,
-        );
-        crate::verifier::verify_withdraw(&proof, &[root, nullifier_hash, ext])?;
-
-        // The nullifier PDA's `init` constraint already enforced single-spend
-        // atomically (this instruction would have failed above it if the PDA
-        // already existed); `spent` is a readability aid only.
-        ctx.accounts.nullifier.spent = true;
-
-        let pool_key = ctx.accounts.pool.key();
-        let vault_bump_arr = [vault_bump];
-        let seeds: &[&[u8]] = &[b"vault", pool_key.as_ref(), &vault_bump_arr];
-        let signer_seeds: &[&[&[u8]]] = &[seeds];
-
-        let payout = denomination - fee;
-        if payout > 0 {
-            system_program::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: ctx.accounts.vault.to_account_info(),
-                        to: ctx.accounts.recipient.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                payout,
-            )?;
-        }
-        if fee > 0 {
-            system_program::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: ctx.accounts.vault.to_account_info(),
-                        to: ctx.accounts.relayer.to_account_info(),
-                    },
-                    signer_seeds,
-                ),
-                fee,
-            )?;
-        }
-        Ok(())
-    }
-
     pub fn commit_intent(
         ctx: Context<CommitIntent>,
         proof: crate::verifier::WithdrawProof,
@@ -518,48 +450,6 @@ pub struct CancelIntent<'info> {
 
     #[account(mut)]
     pub recipient: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-#[instruction(proof: crate::verifier::WithdrawProof, root: [u8; 32], nullifier_hash: [u8; 32])]
-pub struct Withdraw<'info> {
-    #[account(
-        mut,
-        seeds = [b"pool", pool.load()?.mint.as_ref()],
-        bump = pool.load()?.bump
-    )]
-    pub pool: AccountLoader<'info, Pool>,
-
-    /// CHECK: SOL vault PDA (system-owned); pays out lamports via `invoke_signed`.
-    #[account(
-        mut,
-        seeds = [b"vault", pool.key().as_ref()],
-        bump = pool.load()?.vault_bump
-    )]
-    pub vault: UncheckedAccount<'info>,
-
-    // `init` here is the atomic single-spend guard: this transaction fails
-    // outright if the PDA already exists for this `nullifier_hash`.
-    #[account(
-        init,
-        payer = relayer,
-        space = 8 + 1,
-        seeds = [b"nullifier", pool.key().as_ref(), nullifier_hash.as_ref()],
-        bump
-    )]
-    pub nullifier: Account<'info, crate::nullifier::NullifierRecord>,
-
-    // These are the ONLY carriers of the payout destination — `ext_data_hash` is
-    // computed from their keys, not from separate instruction args, so there is
-    // no way to redirect funds without invalidating the proof (see `withdraw`).
-    /// CHECK: payout recipient; bound into the proof via `extDataHash`, not trusted otherwise.
-    #[account(mut)]
-    pub recipient: SystemAccount<'info>,
-
-    #[account(mut)]
-    pub relayer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }

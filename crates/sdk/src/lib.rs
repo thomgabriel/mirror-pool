@@ -10,9 +10,9 @@
 //!   the same single-input Poseidon `crates/parity-fixtures` (the circuit's
 //!   own witness source) calls.
 //! - `compute_ext_data_hash` is a re-export of `ext_data::ext_data_hash`,
-//!   the one shared implementation `pool-program`'s `withdraw` handler also
-//!   calls.
-//! - `build_withdraw_ix` generates its proof via `prover::prove_withdraw`
+//!   the one shared implementation `pool-program`'s `commit_intent` handler
+//!   also calls.
+//! - `build_commit_intent_ix` generates its proof via `prover::prove_withdraw`
 //!   and formats it with `prover::proof_a_to_solana_be`/`g1_to_solana_be`/
 //!   `g2_to_solana_be` — the same encoding `pool-program`'s
 //!   `groth16-solana` verifier expects.
@@ -45,7 +45,7 @@ pub enum SdkError {
 
 /// A shielded note: `commitment = Poseidon2(nullifier, secret)` (the
 /// deposited leaf), spent via `nullifier_hash = Poseidon1(nullifier)` (the
-/// public signal `withdraw` marks as spent). Fields are private; every
+/// public signal `commit_intent` marks as spent). Fields are private; every
 /// `Note` is guaranteed in-field by construction (`new`/`from_parts`), so
 /// `commitment`/`nullifier_hash` never need to fail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,7 @@ impl Note {
     /// `Poseidon1(nullifier)` — matches the circuit's
     /// `nh.inputs[0] <== nullifier; nh.out === nullifierHash` and
     /// `crates/parity-fixtures`'s identical `pool_program::poseidon::hash1`
-    /// call. This is the public `nullifier_hash` the on-chain `withdraw`
+    /// call. This is the public `nullifier_hash` the on-chain `commit_intent`
     /// handler checks against a fresh nullifier PDA for single-spend.
     pub fn nullifier_hash(&self) -> [u8; 32] {
         poseidon::hash1(&self.nullifier).expect("Note fields are validated in-field by from_parts")
@@ -283,46 +283,30 @@ pub struct WithdrawArtifacts<'a> {
     pub zkey_path: &'a Path,
 }
 
-/// The result of building a `withdraw` instruction: the instruction itself,
-/// plus the public inputs the witness actually computed (bound into the
-/// proof — see `prover::PublicInputs`'s doc comment on why `ext_data_hash`
-/// passes through unconstrained while `root`/`nullifier_hash` are
-/// circuit-checked).
 #[derive(Debug, Clone)]
-pub struct WithdrawBuild {
+pub struct CommitIntentBuild {
     pub instruction: Instruction,
     pub public_inputs: PublicInputs,
 }
 
-/// Builds the `withdraw` instruction for `note`, generating a real Groth16
-/// proof via `prover::prove_withdraw` and binding it to `(recipient, relayer,
-/// fee)` through `ext_data_hash` — the SAME hash
-/// `programs/pool-program/src/lib.rs`'s `withdraw` handler recomputes from
-/// the payout accounts' keys, so a proof built here for one set of payout
-/// accounts is rejected outright for any other (front-run safety).
-///
-/// Account order/writability matches `programs/pool-program/src/lib.rs`'s
-/// `Withdraw` context; instruction data field order matches Anchor's
-/// declaration-order Borsh encoding of `withdraw`'s args
-/// (`proof`, `root`, `nullifier_hash`, `fee`).
+/// Builds `commit_intent`: generates a real Groth16 proof for `note` bound to
+/// `(recipient, relayer, fee)` via extDataHash, then encodes the instruction.
+/// Account order matches `programs/pool-program/src/lib.rs`'s `CommitIntent`.
 #[allow(clippy::too_many_arguments)]
-pub fn build_withdraw_ix(
+pub fn build_commit_intent_ix(
     pool: Pubkey,
-    vault: Pubkey,
+    round: Pubkey,
     recipient: Pubkey,
     relayer: Pubkey,
+    payer: Pubkey,
     note: &Note,
     merkle_path: &MerklePath,
     root: [u8; 32],
     fee: u64,
+    round_id: u64,
     artifacts: WithdrawArtifacts,
-) -> Result<WithdrawBuild, ProverError> {
-    // The payout accounts ARE the hashed keys (matching the on-chain
-    // handler's `ctx.accounts.recipient.key()`/`ctx.accounts.relayer.key()`),
-    // so there is no separate "which accounts did I mean" argument to
-    // desync from the accounts actually listed below.
+) -> Result<CommitIntentBuild, ProverError> {
     let ext_data_hash = compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), fee);
-
     let inputs = WithdrawInputs {
         root,
         nullifier_hash: note.nullifier_hash(),
@@ -332,20 +316,26 @@ pub fn build_withdraw_ix(
         path_elements: merkle_path.elements,
         path_indices: merkle_path.indices,
     };
-
     let (proof, public_inputs) = prover::prove_withdraw(
         artifacts.wasm_path,
         artifacts.r1cs_path,
         artifacts.zkey_path,
         &inputs,
     )?;
-
     let withdraw_proof = pool_program::verifier::WithdrawProof {
         a: prover::proof_a_to_solana_be(&proof.a)?,
         b: prover::g2_to_solana_be(&proof.b)?,
         c: prover::g1_to_solana_be(&proof.c)?,
     };
 
+    let (intent_pda, _) = Pubkey::find_program_address(
+        &[
+            b"intent",
+            pool.as_ref(),
+            public_inputs.nullifier_hash.as_ref(),
+        ],
+        &pool_program::ID,
+    );
     let (nullifier_pda, _) = Pubkey::find_program_address(
         &[
             b"nullifier",
@@ -355,34 +345,105 @@ pub fn build_withdraw_ix(
         &pool_program::ID,
     );
 
-    // Anchor Borsh-serializes instruction args field-by-field in declaration
-    // order: `proof: WithdrawProof { a, b, c }`, then `root`, `nullifier_hash`,
-    // `fee` (matches `programs/pool-program/tests/withdraw.rs::withdraw_tx`).
-    let mut data = discriminator("withdraw").to_vec();
+    let mut data = discriminator("commit_intent").to_vec();
     data.extend_from_slice(&withdraw_proof.a);
     data.extend_from_slice(&withdraw_proof.b);
     data.extend_from_slice(&withdraw_proof.c);
     data.extend_from_slice(&public_inputs.root);
     data.extend_from_slice(&public_inputs.nullifier_hash);
     data.extend_from_slice(&fee.to_le_bytes());
+    data.extend_from_slice(&round_id.to_le_bytes());
 
     let instruction = Instruction {
         program_id: pool_program::ID,
         accounts: vec![
-            AccountMeta::new(pool, false),
-            AccountMeta::new(vault, false),
+            AccountMeta::new_readonly(pool, false),
+            AccountMeta::new(round, false),
+            AccountMeta::new(intent_pda, false),
             AccountMeta::new(nullifier_pda, false),
-            AccountMeta::new(recipient, false),
-            AccountMeta::new(relayer, true),
+            AccountMeta::new_readonly(recipient, false),
+            AccountMeta::new_readonly(relayer, false),
+            AccountMeta::new(payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
         ],
         data,
     };
-
-    Ok(WithdrawBuild {
+    Ok(CommitIntentBuild {
         instruction,
         public_inputs,
     })
+}
+
+/// Builds `execute_round`. `intents` is `(intent_pda, recipient, relayer)` per
+/// committed intent, in any order; they become the `remaining_accounts`.
+pub fn build_execute_round_ix(
+    pool: Pubkey,
+    vault: Pubkey,
+    cranker: Pubkey,
+    round_id: u64,
+    intents: &[(Pubkey, Pubkey, Pubkey)],
+) -> Instruction {
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &round_id.to_le_bytes()],
+        &pool_program::ID,
+    );
+    let (next_round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &(round_id + 1).to_le_bytes()],
+        &pool_program::ID,
+    );
+    let mut accounts = vec![
+        AccountMeta::new(pool, false),
+        AccountMeta::new(round, false),
+        AccountMeta::new(next_round, false),
+        AccountMeta::new(vault, false),
+        AccountMeta::new(cranker, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    for (intent, recipient, relayer) in intents {
+        accounts.push(AccountMeta::new(*intent, false));
+        accounts.push(AccountMeta::new(*recipient, false));
+        accounts.push(AccountMeta::new(*relayer, false));
+    }
+    let mut data = discriminator("execute_round").to_vec();
+    data.extend_from_slice(&round_id.to_le_bytes());
+    Instruction {
+        program_id: pool_program::ID,
+        accounts,
+        data,
+    }
+}
+
+/// Builds `cancel_intent` (recipient must sign).
+pub fn build_cancel_intent_ix(
+    pool: Pubkey,
+    vault: Pubkey,
+    recipient: Pubkey,
+    round_id: u64,
+    nullifier_hash: [u8; 32],
+) -> Instruction {
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &round_id.to_le_bytes()],
+        &pool_program::ID,
+    );
+    let (intent, _) = Pubkey::find_program_address(
+        &[b"intent", pool.as_ref(), nullifier_hash.as_ref()],
+        &pool_program::ID,
+    );
+    let mut data = discriminator("cancel_intent").to_vec();
+    data.extend_from_slice(&round_id.to_le_bytes());
+    data.extend_from_slice(&nullifier_hash);
+    Instruction {
+        program_id: pool_program::ID,
+        accounts: vec![
+            AccountMeta::new_readonly(pool, false),
+            AccountMeta::new(round, false),
+            AccountMeta::new(intent, false),
+            AccountMeta::new(vault, false),
+            AccountMeta::new(recipient, true),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    }
 }
 
 #[cfg(test)]
