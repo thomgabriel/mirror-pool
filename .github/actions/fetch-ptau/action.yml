@@ -8,7 +8,7 @@ runs:
   steps:
     - name: Cache pot14_final.ptau
       id: cache-ptau
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: circuits/ptau/pot14_final.ptau
         # Keyed on the sha256 pinned in circuits/ptau/README.md / circuits/scripts/setup.sh —
