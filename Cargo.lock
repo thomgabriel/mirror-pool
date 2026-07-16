@@ -3967,6 +3967,7 @@ dependencies = [
  "anchor-lang",
  "blake3",
  "bytemuck",
+ "ext-data",
  "groth16-solana",
  "litesvm",
  "prover",

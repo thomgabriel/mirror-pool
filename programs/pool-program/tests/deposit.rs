@@ -28,7 +28,7 @@ const COMMITMENT_NOT_IN_FIELD_CODE: u32 = 6002;
 const NEXT_INDEX_OFFSET: usize = 8 + core::mem::offset_of!(Pool, next_index);
 const CURRENT_ROOT_OFFSET: usize = 8 + core::mem::offset_of!(Pool, current_root);
 
-fn setup_pool() -> (LiteSVM, Keypair, Pubkey, Pubkey) {
+fn setup_pool(denomination: u64) -> (LiteSVM, Keypair, Pubkey, Pubkey) {
     let mut svm = LiteSVM::new();
     let payer = Keypair::new();
     svm.airdrop(&payer.pubkey(), 10_000_000_000).unwrap();
@@ -38,6 +38,8 @@ fn setup_pool() -> (LiteSVM, Keypair, Pubkey, Pubkey) {
     let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
     let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
 
+    let mut data = disc("initialize_pool").to_vec();
+    data.extend_from_slice(&denomination.to_le_bytes());
     let ix = Instruction {
         program_id: program_id(),
         accounts: vec![
@@ -47,7 +49,7 @@ fn setup_pool() -> (LiteSVM, Keypair, Pubkey, Pubkey) {
             AccountMeta::new(payer.pubkey(), true),
             AccountMeta::new_readonly(system_program::ID, false),
         ],
-        data: disc("initialize_pool").to_vec(),
+        data,
     };
     let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
     svm.send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
@@ -79,7 +81,7 @@ fn deposit_ix(
 
 #[test]
 fn deposit_moves_lamports_and_advances_tree() {
-    let (mut svm, payer, pool, vault) = setup_pool();
+    let (mut svm, payer, pool, vault) = setup_pool(1_000_000);
 
     let root_before = svm.get_account(&pool).unwrap().data()
         [CURRENT_ROOT_OFFSET..CURRENT_ROOT_OFFSET + 32]
@@ -121,7 +123,7 @@ fn deposit_moves_lamports_and_advances_tree() {
 
 #[test]
 fn deposit_rejects_zero_amount() {
-    let (mut svm, payer, pool, vault) = setup_pool();
+    let (mut svm, payer, pool, vault) = setup_pool(1_000_000);
     let commitment = {
         let mut c = [0u8; 32];
         c[31] = 7;
@@ -159,7 +161,7 @@ fn deposit_rejects_zero_amount() {
 
 #[test]
 fn deposit_rejects_out_of_field_commitment() {
-    let (mut svm, payer, pool, vault) = setup_pool();
+    let (mut svm, payer, pool, vault) = setup_pool(1_000_000);
     // Larger than the BN254 scalar field modulus in every leading byte, so it fails the
     // `is_in_field` range check regardless of the exact modulus value.
     let commitment = [0xffu8; 32];

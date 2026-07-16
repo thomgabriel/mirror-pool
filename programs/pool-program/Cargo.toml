@@ -43,6 +43,10 @@ solana-poseidon = "~2.2"
 # `proof_a_to_solana_be`/`g1_to_solana_be`/`g2_to_solana_be` and `crates/vk-gen`'s
 # generated `vk.rs` exactly.
 groth16-solana = "0.2"
+# The single shared extDataHash implementation (keccak-concat + BE mod-r reduce),
+# also consumed by `crates/parity-fixtures` (circuit witness) and (later) the SDK —
+# see the plan's Global Constraints on why there must be exactly one implementation.
+ext-data = { path = "../../crates/ext-data" }
 
 [dev-dependencies]
 litesvm = "=0.6.1"

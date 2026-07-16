@@ -32,7 +32,11 @@ fn initialize_pool_creates_account_with_nonzero_root() {
             AccountMeta::new(payer.pubkey(), true),
             AccountMeta::new_readonly(system_program::ID, false),
         ],
-        data: disc("initialize_pool").to_vec(),
+        data: {
+            let mut d = disc("initialize_pool").to_vec();
+            d.extend_from_slice(&1_000_000u64.to_le_bytes());
+            d
+        },
     };
     let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
     let tx = Transaction::new(&[&payer], msg, svm.latest_blockhash());

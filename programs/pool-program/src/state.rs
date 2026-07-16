@@ -15,6 +15,10 @@ use anchor_lang::prelude::*;
 #[account(zero_copy)]
 pub struct Pool {
     pub mint: Pubkey,
+    // Single-denomination pool: every deposit/withdraw moves exactly this many
+    // lamports. Placed immediately after `mint` (already 8-aligned at offset 32)
+    // so an 8-byte field opens no implicit padding gap.
+    pub denomination: u64,
     pub bump: u8,
     pub vault_bump: u8,
     // `repr(C)` would insert this gap implicitly to 4-byte-align `next_index`; bytemuck's
@@ -27,7 +31,17 @@ pub struct Pool {
     pub filled_subtrees: [[u8; 32]; TREE_HEIGHT],
     pub roots: [[u8; 32]; ROOT_HISTORY_SIZE],
     pub current_root_index: u32,
+    // Adding `denomination: u64` raised the struct's alignment to 8, so the
+    // compiler now rounds the total size up to a multiple of 8 — an implicit
+    // 4-byte trailing gap that `Pod`'s derive would otherwise reject. Name it.
+    _reserved2: [u8; 4],
 }
+
+// `Pod` (bytemuck) rejects implicit padding at compile time, but it can't catch a
+// *trailing* gap after the last field if the struct's total size isn't already a
+// multiple of its alignment — assert that explicitly so any future field addition
+// that reintroduces one fails fast here rather than as an opaque derive error.
+const _: () = assert!(core::mem::size_of::<Pool>().is_multiple_of(8));
 
 impl Pool {
     pub const SPACE: usize = 8 + core::mem::size_of::<Pool>();
