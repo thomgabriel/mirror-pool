@@ -63,7 +63,7 @@ pub const TIMEOUT_SLOTS: u64 = 9_000;
 pub fn cancel_unlock_slot(committed_slot: u64) -> Result<u64> {
     committed_slot
         .checked_add(TIMEOUT_SLOTS)
-        .ok_or(error!(crate::PoolError::CancelTooEarly))
+        .ok_or(error!(PoolError::CancelTooEarly))
 }
 
 #[cfg(test)]
