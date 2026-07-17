@@ -17,7 +17,7 @@ use solana_sdk::{
     message::Message,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
-    system_program,
+    system_instruction, system_program,
     transaction::Transaction,
 };
 use std::path::{Path, PathBuf};
@@ -45,6 +45,9 @@ pub struct RoundFixture {
     pub vault: Pubkey,
     pub k_floor: u16,
     pub intents: Vec<IntentMaterial>,
+    // Real validator vote account for a Stake pool (`Pubkey::default()` for a
+    // Withdraw pool, matching `pool.validator`'s own zero value there).
+    pub validator: Pubkey,
 }
 
 fn workspace_root() -> PathBuf {
@@ -233,6 +236,7 @@ pub fn build_round_fixture(k_floor: u16, n: usize) -> RoundFixture {
         vault,
         k_floor,
         intents,
+        validator: Pubkey::default(),
     }
 }
 
@@ -379,6 +383,7 @@ pub fn build_round_fixture_signer_recipients(
             vault,
             k_floor,
             intents,
+            validator: Pubkey::default(),
         },
         recipient_keypairs,
     )
@@ -391,28 +396,87 @@ fn stake_account_rent() -> u64 {
     solana_sdk::rent::Rent::default().minimum_balance(pool_program::invariants::STAKE_ACCOUNT_SIZE)
 }
 
+/// The denomination `build_stake_round_fixture` sizes its pool to: enough to
+/// clear `stake_fee + rent + MIN_STAKE_DELEGATION` with slack. Exposed so
+/// execute-round tests can independently recompute `to_stake = denomination -
+/// stake_fee` (the amount the stake account is funded with) without
+/// re-deriving the fixture's internal formula.
+pub fn stake_pool_denomination(stake_fee: u64) -> u64 {
+    pool_program::invariants::MIN_STAKE_DELEGATION + stake_account_rent() + stake_fee + 1_000_000
+}
+
+/// Create a real, delegable validator vote account: a funded node identity
+/// plus a Vote-program-owned account initialized via the real
+/// `CreateAccount`+`InitializeAccount` CPI pair (not a hand-serialized
+/// `VoteState`) so `DelegateStake` accepts it exactly as it would on a live
+/// cluster. Returns the vote account's pubkey (the pool's `validator`).
+pub fn create_validator_vote_account(svm: &mut LiteSVM, payer: &Keypair) -> Pubkey {
+    use solana_sdk::vote::{
+        instruction::{create_account_with_config, CreateVoteAccountConfig},
+        state::{VoteInit, VoteStateVersions},
+    };
+
+    let node = Keypair::new();
+    let vote_account = Keypair::new();
+    let rent = solana_sdk::rent::Rent::default();
+    let vote_space = VoteStateVersions::vote_state_size_of(true) as u64;
+
+    let mut instructions = vec![system_instruction::create_account(
+        &payer.pubkey(),
+        &node.pubkey(),
+        rent.minimum_balance(0),
+        0,
+        &system_program::ID,
+    )];
+    instructions.extend(create_account_with_config(
+        &payer.pubkey(),
+        &vote_account.pubkey(),
+        &VoteInit {
+            node_pubkey: node.pubkey(),
+            authorized_voter: node.pubkey(),
+            authorized_withdrawer: node.pubkey(),
+            commission: 0,
+        },
+        rent.minimum_balance(vote_space as usize),
+        CreateVoteAccountConfig {
+            space: vote_space,
+            ..Default::default()
+        },
+    ));
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            instructions[0].clone(),
+            instructions[1].clone(),
+        ],
+        Some(&payer.pubkey()),
+    );
+    svm.send_transaction(Transaction::new(
+        &[payer, &node, &vote_account],
+        msg,
+        svm.latest_blockhash(),
+    ))
+    .expect("real vote-account creation must succeed");
+    vote_account.pubkey()
+}
+
 /// Like `build_round_fixture`, but the pool is configured as a STAKE pool
-/// (`action_kind = 1`) with the given `validator`/`stake_fee`. Every intent's
-/// `fee` is set to `stake_fee` (the only value `commit_intent`'s uniform-fee
-/// guard accepts for a stake pool), and the denomination is sized to clear
-/// `fee + rent + MIN_STAKE_DELEGATION` with slack.
-pub fn build_stake_round_fixture(
-    k_floor: u16,
-    n: usize,
-    validator: Pubkey,
-    stake_fee: u64,
-) -> RoundFixture {
+/// (`action_kind = 1`) targeting a freshly created, real, delegable validator
+/// vote account (`fx.validator`). Every intent's `fee` is set to `stake_fee`
+/// (the only value `commit_intent`'s uniform-fee guard accepts for a stake
+/// pool), and the denomination is sized to clear `fee + rent +
+/// MIN_STAKE_DELEGATION` with slack.
+pub fn build_stake_round_fixture(k_floor: u16, n: usize, stake_fee: u64) -> RoundFixture {
     let build_dir = ensure_build_artifacts();
 
-    let denomination = pool_program::invariants::MIN_STAKE_DELEGATION
-        + stake_account_rent()
-        + stake_fee
-        + 1_000_000;
+    let denomination = stake_pool_denomination(stake_fee);
 
     let mut svm = LiteSVM::new();
     let payer = Keypair::new();
     svm.airdrop(&payer.pubkey(), 100_000_000_000).unwrap();
     svm.add_program_from_file(program_id(), so_path()).unwrap();
+
+    let validator = create_validator_vote_account(&mut svm, &payer);
 
     let mint = Pubkey::new_unique();
     let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
@@ -536,6 +600,7 @@ pub fn build_stake_round_fixture(
         vault,
         k_floor,
         intents,
+        validator,
     }
 }
 

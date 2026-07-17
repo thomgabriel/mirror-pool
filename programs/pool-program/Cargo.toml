@@ -58,6 +58,9 @@ solana-stake-interface = { version = "1.2", features = ["bincode"] }
 [dev-dependencies]
 litesvm = "=0.6.1"
 solana-sdk = "~2.2"
+# Native stake accounts are bincode-encoded (not Borsh) — `stake_round.rs`
+# deserializes `StakeStateV2` directly to assert the real on-chain delegation.
+bincode = "1"
 # Generates a real withdraw proof in-test to exercise `verifier::verify_withdraw`
 # end-to-end; see `ensure_build_artifacts` in tests/verifier.rs (mirrors prover's
 # own build guard).

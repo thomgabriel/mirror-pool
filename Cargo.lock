@@ -3964,6 +3964,7 @@ name = "pool-program"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "bincode",
  "blake3",
  "bytemuck",
  "ext-data",

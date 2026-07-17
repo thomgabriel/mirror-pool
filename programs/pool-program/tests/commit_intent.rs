@@ -194,9 +194,8 @@ fn commit_intent_rejects_fee_over_denomination() {
 // mismatched fee in the instruction data.
 #[test]
 fn commit_intent_rejects_wrong_stake_fee() {
-    let validator = Pubkey::new_unique();
     let stake_fee = 5_000u64;
-    let mut fx = build_stake_round_fixture(2, 1, validator, stake_fee);
+    let mut fx = build_stake_round_fixture(2, 1, stake_fee);
     let m = &fx.intents[0];
     let (round0, _) = Pubkey::find_program_address(
         &[b"round", fx.pool.as_ref(), &0u64.to_le_bytes()],
@@ -253,9 +252,8 @@ fn commit_intent_rejects_wrong_stake_fee() {
 
 #[test]
 fn commit_intent_accepts_matching_stake_fee() {
-    let validator = Pubkey::new_unique();
     let stake_fee = 5_000u64;
-    let mut fx = build_stake_round_fixture(2, 1, validator, stake_fee);
+    let mut fx = build_stake_round_fixture(2, 1, stake_fee);
     // The fixture sets intents[0].fee == stake_fee, so the plain builder's
     // encoded fee already matches — this must succeed.
     let tx = commit_intent_tx(&fx, 0, 0);
