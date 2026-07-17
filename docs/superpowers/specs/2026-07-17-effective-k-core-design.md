@@ -68,12 +68,24 @@ This is the entire point of the artifact; the language below is a **ceiling**, n
    Doc comments cite Cachin 1997 §2.3 (the `2^H` source-coding move) and Dodis–Reyzin–Smith 2007 §2.1
    (predictability `max_a P[A=a] = 2^{−H_∞}` *is* the single-guess success probability), for the
    underlying facts — **not** for the names. Preserve every `[VERIFIED]`/`[UNVERIFIED]` flag.
+4. **Action-agnostic metric ≠ action-independent anonymity.** The metric depends only on the
+   funder→note distribution, so given the *same* mapping, withdraw and stake yield the *same* `k_∞`
+   — that is all "action-agnostic" means, and it is why "measure both" is free. It must **NOT** be
+   read as "withdraw and stake are equally anonymous." They are not: the *clustering feasibility* —
+   how easily an adversary builds the funder→note mapping — is action-dependent. Stake delegation has
+   a richer observable surface (the validator target, timing) and a structurally small target set,
+   making it the more exposed / more clusterable action (frontier §2.2), so a *faithful* stake
+   measurement feeds a stronger clustering and typically reports a **lower** `k_∞` at the same nominal
+   `k`. The metric is action-agnostic; the anonymity is not. Leaving this implicit would be
+   overclaim-by-omission — the exact failure mode this artifact exists to prevent.
 
 ## Input / output types (the spec pins these)
 
 **Action-agnostic by construction:** the input carries only the funder→note distribution — no action
-kind. So withdraw and stake give the identical number; "measure both" is free, and there must be **no
-action-kind field and no special-casing.**
+kind. So for the *same* mapping, withdraw and stake give the identical number; "measure both" is free,
+and there must be **no action-kind field and no special-casing.** (This is metric-level
+action-agnosticism — NOT a claim that the actions are equally anonymous; the clustering that *builds*
+the mapping is action-dependent. See Honest scoping point 4.)
 
 ```rust
 /// An opaque clustered-funder label. The metric treats it purely as an equality key
@@ -83,11 +95,25 @@ action-kind field and no special-casing.**
 /// host-analysis crate.
 pub struct FunderId([u8; 32]);   // derive Clone, Copy, PartialEq, Eq, Hash
 
-/// Ground-truth of who funded each of the k notes in one round. `funders[i]` is the
-/// funding entity of note i; `k = funders.len()`. This is a HOST MODEL — the chain cannot
-/// produce this mapping (that is the privacy guarantee). Deliberately no action kind:
-/// the metric depends only on the funder distribution, so it is action-agnostic.
-pub struct RoundComposition { pub funders: Vec<FunderId> }
+/// Ground-truth of who funded each of the k notes in one round. This is a HOST MODEL —
+/// the chain cannot produce this mapping (that is the privacy guarantee). **Non-empty by
+/// construction:** the `funders` field is private and `new` rejects an empty round, so
+/// `k = self.funders().len() >= 1` always holds — illegal states are unrepresentable,
+/// `anonymity_report` stays total (no empty-round branch, no division by zero), and the
+/// fail-closed check lives at the boundary. Deliberately carries NO action kind (see the
+/// action-agnostic note in Honest scoping).
+pub struct RoundComposition { funders: Vec<FunderId> }   // private — construct via `new`
+
+/// Construction error for a `RoundComposition`. (derive `Debug`; impl `Display` +
+/// `std::error::Error` by hand — the crate is dependency-free, no `thiserror`.)
+pub enum CompositionError { EmptyRound }
+
+impl RoundComposition {
+    /// Rejects an empty round (`k = 0` — nothing to measure). `funders[i]` = the funding
+    /// entity of note i.
+    pub fn new(funders: Vec<FunderId>) -> Result<Self, CompositionError>;
+    pub fn funders(&self) -> &[FunderId];
+}
 
 /// The measured anonymity of a round. All fields are MONITORING numbers, never on-chain
 /// gates. `effective_k` (min-entropy k_∞) is the headline; `shannon_effective_k` is a
@@ -111,11 +137,12 @@ pub fn anonymity_report(comp: &RoundComposition) -> AnonymityReport;
 pub fn collapses_below(report: &AnonymityReport, floor: f64) -> bool;
 ```
 
-An empty round (`k = 0`) is a caller error; the spec's decision is that `anonymity_report` treats
-`k = 0` as an invalid input (there is no round to measure) — return a `Result`/`Option`, or document
-a debug-assert precondition; the plan picks the fail-closed shape consistent with the crate having no
-untrusted-input surface (it is a host analysis tool, not a custody path). `k ≥ 1` always yields
-`m ≥ 1`, so no division-by-zero elsewhere.
+The empty-round contract is pinned in the type, not left to the plan: `RoundComposition::new`
+rejects `k = 0` (nothing to measure), so `anonymity_report(&RoundComposition) -> AnonymityReport`
+is **total** — a valid composition has `k ≥ 1` hence `m ≥ 1`, so there is no empty-round branch and
+no division by zero anywhere downstream. (An `anonymity_report(...) -> Result` that validates on each
+call is an acceptable alternative, but the validating constructor keeps the hot path total and makes
+illegal states unrepresentable — the fail-closed choice.)
 
 ## Decisions this spec makes (and justifies)
 
