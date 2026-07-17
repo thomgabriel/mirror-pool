@@ -25,11 +25,30 @@ pub mod pool_program {
         ctx: Context<InitializePool>,
         denomination: u64,
         k_floor: u16,
+        action_kind: u8,
+        validator: Pubkey,
+        stake_fee: u64,
     ) -> Result<()> {
         require!(
             k_floor >= crate::round::MIN_K_FLOOR,
             PoolError::KFloorTooLow
         );
+        // Validate the action config. Withdraw pools carry no stake params; stake
+        // pools must name a validator and clear the delegation floor.
+        match action_kind {
+            0 => require!(
+                validator == Pubkey::default() && stake_fee == 0,
+                PoolError::WrongActionConfig
+            ),
+            1 => {
+                require!(validator != Pubkey::default(), PoolError::WrongActionConfig);
+                let stake_rent =
+                    Rent::get()?.minimum_balance(crate::invariants::STAKE_ACCOUNT_SIZE);
+                // Fails closed if denomination can't cover fee + rent + min delegation.
+                crate::invariants::stake_split(denomination, stake_fee, stake_rent)?;
+            }
+            _ => return err!(PoolError::WrongActionConfig),
+        }
 
         let z = zeros().map_err(|_| error!(PoolError::MerkleInit))?;
         let root = empty_root(&z).map_err(|_| error!(PoolError::MerkleInit))?;
@@ -56,6 +75,9 @@ pub mod pool_program {
             pool.denomination = denomination;
             pool.k_floor = k_floor;
             pool.current_round_id = 0;
+            pool.action_kind = action_kind;
+            pool.validator = validator;
+            pool.stake_fee = stake_fee;
             pool.bump = ctx.bumps.pool;
             pool.vault_bump = ctx.bumps.vault;
             pool.filled_subtrees = z; // empty tree: filled subtrees == zeros
@@ -125,6 +147,10 @@ pub mod pool_program {
                 PoolError::UnknownRoot
             );
             require!(fee <= pool.denomination, PoolError::FeeExceedsDenomination);
+            // Stake pools require a uniform, pool-fixed fee (privacy + liveness — see note).
+            if pool.action_kind == 1 {
+                require!(fee == pool.stake_fee, PoolError::WrongActionConfig);
+            }
         }
         require!(
             ctx.accounts.round.state == crate::round::RoundState::Open,
@@ -296,6 +322,14 @@ pub mod pool_program {
             match intent.action {
                 crate::round::ActionKind::Withdraw => {
                     crate::action::PooledAction::execute(&action)?;
+                }
+                // `commit_intent` (this task) always writes `ActionKind::Withdraw`
+                // regardless of `pool.action_kind`, so this arm is unreachable until
+                // Plan 5 Task 3 wires the real stake dispatch; it exists only to keep
+                // this match exhaustive now that `ActionKind::Stake` exists. Fails
+                // closed rather than panicking if that ever changes before Task 3 lands.
+                crate::round::ActionKind::Stake => {
+                    return err!(PoolError::WrongActionConfig);
                 }
             }
         }
@@ -546,4 +580,10 @@ pub enum PoolError {
     IntentAccountMismatch,
     #[msg("duplicate intent account in the batch")]
     DuplicateIntent,
+    #[msg("action_kind/validator/stake_fee configuration is invalid for this pool")]
+    WrongActionConfig,
+    #[msg("stake pool denomination is too low to cover fee + rent + minimum delegation")]
+    StakeDenominationTooLow,
+    #[msg("account does not match the pool's configured stake action")]
+    StakeAccountInvalid,
 }

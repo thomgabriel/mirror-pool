@@ -38,6 +38,15 @@ pub struct Pool {
     pub k_floor: u16,
     _reserved2: [u8; 2],
     pub current_round_id: u64,
+    // Plan 5: a pool is ONE action kind (0 = Withdraw, 1 = Stake). Stored as u8
+    // (not the `ActionKind` enum) because zero_copy `Pool` is bytemuck `Pod`.
+    // `stake_fee` (8-aligned at the current tail end 3936) then `validator`
+    // ([u8;32], 1-aligned) then `action_kind` (u8) then an explicit trailing pad
+    // keep the struct free of implicit padding and a multiple of 8 (3936 → 3984).
+    pub stake_fee: u64,
+    pub validator: Pubkey,
+    pub action_kind: u8,
+    _reserved3: [u8; 7],
 }
 
 // `Pod` (bytemuck) rejects implicit padding at compile time, but it can't catch a

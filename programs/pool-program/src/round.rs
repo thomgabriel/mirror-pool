@@ -25,6 +25,7 @@ impl Round {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ActionKind {
     Withdraw,
+    Stake,
 }
 
 /// A committed intent: the note is already spent (its nullifier PDA exists);

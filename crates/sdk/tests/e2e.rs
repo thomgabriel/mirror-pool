@@ -116,6 +116,9 @@ fn sdk_driven_round_trip_two_intents() {
         payer.pubkey(),
         DENOMINATION,
         2,
+        0,
+        Pubkey::default(),
+        0,
     );
     send(&mut svm, &payer, &[&payer], init);
 

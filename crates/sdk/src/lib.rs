@@ -133,6 +133,7 @@ fn discriminator(name: &str) -> [u8; 8] {
 
 /// Builds the `initialize_pool` instruction. Account order/writability
 /// matches `programs/pool-program/src/lib.rs`'s `InitializePool` context.
+#[allow(clippy::too_many_arguments)]
 pub fn build_initialize_pool_ix(
     pool: Pubkey,
     vault: Pubkey,
@@ -141,10 +142,16 @@ pub fn build_initialize_pool_ix(
     payer: Pubkey,
     denomination: u64,
     k_floor: u16,
+    action_kind: u8,
+    validator: Pubkey,
+    stake_fee: u64,
 ) -> Instruction {
     let mut data = discriminator("initialize_pool").to_vec();
     data.extend_from_slice(&denomination.to_le_bytes());
     data.extend_from_slice(&k_floor.to_le_bytes());
+    data.push(action_kind);
+    data.extend_from_slice(&validator.to_bytes());
+    data.extend_from_slice(&stake_fee.to_le_bytes());
     Instruction {
         program_id: pool_program::ID,
         accounts: vec![
@@ -533,11 +540,25 @@ mod tests {
         let denomination = 1_000_000u64;
         let k_floor = 2u16;
 
-        let ix = build_initialize_pool_ix(pool, vault, round, mint, payer, denomination, k_floor);
+        let ix = build_initialize_pool_ix(
+            pool,
+            vault,
+            round,
+            mint,
+            payer,
+            denomination,
+            k_floor,
+            0,
+            Pubkey::default(),
+            0,
+        );
 
         assert_eq!(&ix.data[..8], &discriminator("initialize_pool"));
         assert_eq!(&ix.data[8..16], &denomination.to_le_bytes());
         assert_eq!(&ix.data[16..18], &k_floor.to_le_bytes());
+        assert_eq!(ix.data[18], 0, "action_kind");
+        assert_eq!(&ix.data[19..51], &Pubkey::default().to_bytes(), "validator");
+        assert_eq!(&ix.data[51..59], &0u64.to_le_bytes(), "stake_fee");
         assert_eq!(ix.accounts.len(), 6);
         assert_eq!(ix.accounts[4].pubkey, payer);
         assert!(ix.accounts[4].is_signer);
