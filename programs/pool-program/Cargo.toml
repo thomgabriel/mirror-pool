@@ -49,6 +49,11 @@ groth16-solana = "0.2"
 # also consumed by `crates/parity-fixtures` (circuit witness) and (later) the SDK —
 # see the plan's Global Constraints on why there must be exactly one implementation.
 ext-data = { path = "../../crates/ext-data" }
+# Stake program instruction builders/state for `StakeAction` (action.rs). The
+# `bincode` feature is REQUIRED — `initialize`/`delegate_stake`/`authorize` are all
+# `#[cfg(feature = "bincode")]`. Already resolved in the lockfile transitively via
+# solana-program 2.2; declared directly so it can't silently lose the feature.
+solana-stake-interface = { version = "1.2", features = ["bincode"] }
 
 [dev-dependencies]
 litesvm = "=0.6.1"

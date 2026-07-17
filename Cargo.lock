@@ -3974,6 +3974,7 @@ dependencies = [
  "serde_json",
  "solana-poseidon",
  "solana-sdk",
+ "solana-stake-interface",
 ]
 
 [[package]]
