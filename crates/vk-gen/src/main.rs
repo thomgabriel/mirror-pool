@@ -27,9 +27,9 @@ fn fq_from_decimal(s: &str) -> Fq {
 
 fn g1_from_json(el: &Value) -> G1Affine {
     let a = el.as_array().expect("G1 point is a 3-element array");
-    let x = fq_from_decimal(a[0].as_str().unwrap());
-    let y = fq_from_decimal(a[1].as_str().unwrap());
-    let z = fq_from_decimal(a[2].as_str().unwrap());
+    let x = fq_from_decimal(a[0].as_str().expect("G1 x is a decimal string"));
+    let y = fq_from_decimal(a[1].as_str().expect("G1 y is a decimal string"));
+    let z = fq_from_decimal(a[2].as_str().expect("G1 z is a decimal string"));
     G1Affine::from(G1Projective::new(x, y, z))
 }
 
@@ -38,8 +38,8 @@ fn g2_from_json(el: &Value) -> G2Affine {
     let coord = |v: &Value| -> Fq2 {
         let c = v.as_array().expect("Fq2 coordinate is a 2-element array");
         Fq2::new(
-            fq_from_decimal(c[0].as_str().unwrap()),
-            fq_from_decimal(c[1].as_str().unwrap()),
+            fq_from_decimal(c[0].as_str().expect("Fq2 c0 is a decimal string")),
+            fq_from_decimal(c[1].as_str().expect("Fq2 c1 is a decimal string")),
         )
     };
     G2Affine::from(G2Projective::new(coord(&a[0]), coord(&a[1]), coord(&a[2])))
@@ -74,15 +74,19 @@ fn render_vk_rs(v: &Value) -> String {
         "withdraw circuit must expose exactly 3 public inputs (root, nullifierHash, extDataHash)"
     );
 
-    let alpha_g1 = prover::g1_to_solana_be(&g1_from_json(&v["vk_alpha_1"])).unwrap();
-    let beta_g2 = prover::g2_to_solana_be(&g2_from_json(&v["vk_beta_2"])).unwrap();
-    let gamma_g2 = prover::g2_to_solana_be(&g2_from_json(&v["vk_gamma_2"])).unwrap();
-    let delta_g2 = prover::g2_to_solana_be(&g2_from_json(&v["vk_delta_2"])).unwrap();
+    let alpha_g1 =
+        prover::g1_to_solana_be(&g1_from_json(&v["vk_alpha_1"])).expect("alpha_g1 to solana bytes");
+    let beta_g2 =
+        prover::g2_to_solana_be(&g2_from_json(&v["vk_beta_2"])).expect("beta_g2 to solana bytes");
+    let gamma_g2 =
+        prover::g2_to_solana_be(&g2_from_json(&v["vk_gamma_2"])).expect("gamma_g2 to solana bytes");
+    let delta_g2 =
+        prover::g2_to_solana_be(&g2_from_json(&v["vk_delta_2"])).expect("delta_g2 to solana bytes");
     let ic: Vec<[u8; 64]> = v["IC"]
         .as_array()
         .expect("IC is an array")
         .iter()
-        .map(|p| prover::g1_to_solana_be(&g1_from_json(p)).unwrap())
+        .map(|p| prover::g1_to_solana_be(&g1_from_json(p)).expect("IC point to solana bytes"))
         .collect();
     assert_eq!(ic.len(), n_public + 1, "vk_ic must have nPublic+1 entries");
 
