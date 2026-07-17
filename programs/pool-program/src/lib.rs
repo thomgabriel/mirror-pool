@@ -33,10 +33,9 @@ pub mod pool_program {
             k_floor >= crate::round::MIN_K_FLOOR,
             PoolError::KFloorTooLow
         );
-        // Validate the action config. Withdraw pools carry no validator; the pool-wide fee must fit the denomination.
+        // Withdraw pools carry no validator and a fee ≤ denomination; stake pools name a validator and clear the delegation floor.
         match action_kind {
             0 => {
-                // Withdraw pools carry no validator; the pool-wide fee must fit the denomination.
                 require!(validator == Pubkey::default(), PoolError::WrongActionConfig);
                 require!(fee <= denomination, PoolError::FeeExceedsDenomination);
             }
