@@ -81,9 +81,20 @@ pure fn; the enforcement is a one-line `require!`, matching the `lib.rs:151-153`
 - **`lib.rs:80`** — `pool.stake_fee = stake_fee` → `pool.fee = fee`.
 - **`lib.rs:149,151-152`** — the core change: collapse the per-intent `fee <= denomination`
   check and the stake-only `fee == stake_fee` branch into ONE unconditional check (decision D2).
+- **`lib.rs:263-281`** — `execute_round` already reads the pool fee (`stake_fee` → `fee`) into
+  a local at the top, **in scope for both dispatch arms**; no change beyond the rename.
 - **`lib.rs:270,280`** — the stake dispatch reads `pool.stake_fee` → `pool.fee`.
-- **`lib.rs:384`** — the execute-round defense-in-depth `require!(intent.fee == stake_fee, …)`
-  → `intent.fee == fee`, with the error updated per D1.
+- **`lib.rs:384`** — the stake arm's execute-time defense-in-depth
+  `require!(intent.fee == stake_fee, WrongActionConfig)` → `require!(intent.fee == fee,
+  PoolError::FeeNotUniform)` (rename + the D1 error change).
+- **`lib.rs:~349` (withdraw arm) — ADD the symmetric check.** The withdraw dispatch currently
+  passes `fee: intent.fee` into `WithdrawAction` with **no execute-time re-check** — an
+  asymmetry with the stake arm. Add, before constructing `WithdrawAction` (mirroring line 384,
+  using the in-scope `fee` local): `require!(intent.fee == fee, PoolError::FeeNotUniform);`.
+  This is the load-bearing fix that makes D1's "both action kinds" true (see D1), restores
+  stake/withdraw symmetry, and honors Plan 5's banked lesson — *"uniformity is the product;
+  execute IDENTICALLY; apply this lens to every future `PooledAction` adapter."* `WithdrawAction`
+  is a `PooledAction` adapter that now has a uniform fee to protect.
 - **`lib.rs:688`** — the `WrongActionConfig` `#[msg("…stake_fee configuration is invalid…")]`
   text must drop "stake_fee" (→ "fee").
 - **`invariants.rs:34`** — `stake_split`'s `stake_fee` parameter name (internal; optional
@@ -102,8 +113,12 @@ pure fn; the enforcement is a one-line `require!`, matching the `lib.rs:151-153`
 Add a **new `PoolError` variant `FeeNotUniform`, appended after the current last variant
 `CancelTooEarly`** (`lib.rs:695`), honouring the append-only convention the timeout-cancel
 spec established (`deposit.rs` hardcodes error codes 6001/6002; inserting/reordering breaks
-them). Use it for **both** the commit-time uniformity check and the execute-time
-defense-in-depth check, for **both** action kinds.
+them). Use it for the commit-time uniformity check (D2) **and** the execute-time
+defense-in-depth check on **both** action kinds — which requires **adding** the withdraw-side
+re-check that does not exist today (the stake arm's check at `lib.rs:384` moves to this
+variant; the withdraw arm gains a symmetric one — see the ripple's `lib.rs:~349` entry). The
+"both kinds" property is not automatic in the current wiring; it is a deliberate part of this
+change.
 
 *Why not reuse `WrongActionConfig`:* its message and role are **init-time pool-config
 validation** ("action_kind/validator/fee configuration is invalid for *this pool*"). A
@@ -181,16 +196,21 @@ anonymity set), which is the honest way to price differently without leaking a l
   - after `execute_round` on a withdraw pool, **all recipient payouts are identical** across
     the round (`payout == denomination − pool.fee` for every intent) — the direct
     amount-uniformity assertion, non-tautological;
+  - **execute-time defense-in-depth (the fix-B check):** a *crafted* withdraw `Intent` whose
+    `fee ≠ pool.fee` (built directly to bypass `commit_intent`, mirroring the existing stake
+    `execute_round_stake_rejects_wrong_fee` test) → `execute_round` rejects it with
+    `FeeNotUniform`. This is the test that proves the newly-added withdraw-arm re-check
+    actually fires;
   - `initialize_pool` for a withdraw pool with a nonzero `fee ≤ denomination` **stores** it
     (offset/deserialize read) and `commit_intent` then **enforces** it;
   - `initialize_pool` for a withdraw pool with `fee > denomination` → rejected
     (`FeeExceedsDenomination`).
-- **Adjust the existing withdraw-config test:** `initialize_withdraw_pool_rejects_stake_params`
-  currently rejects a withdraw pool carrying stake params. Under D3 a withdraw pool **may** now
-  carry a nonzero `fee` (only a nonzero `validator` is rejected), so this test's fee-rejection
-  expectation, if present, must be dropped; its validator-rejection half stays. (Per the Plan 5
-  review it currently exercises only the validator half, so the likely change is just the
-  renamed field — the plan must confirm against the merged test.)
+- **The existing withdraw-config test needs only a mechanical rename (confirmed against
+  source).** `initialize_withdraw_pool_rejects_stake_params` passes `action_kind = 0` with a
+  **nonzero validator** and `stake_fee = 0`, and asserts `WrongActionConfig` — it exercises
+  **only the validator half**, with no fee-rejection assertion. Under D3 a nonzero validator is
+  still rejected, so the change is purely mechanical: rename the trailing `stake_fee = 0`
+  argument to `fee = 0`; the assertion is unchanged.
 - The check is a one-line `require!` and the init bound is a trivial comparison — **no new
   pure fn** is warranted (the research's explicit call; YAGNI). The SBF-invisible branches
   here are trivial equality/inequality; no `invariants.rs` host-coverage addition is needed
@@ -216,7 +236,11 @@ anonymity set), which is the honest way to price differently without leaking a l
   in-tree).
 - **Amount / value linkage (the settlement fingerprint):** Kappos *et al.* 2018, "An
   Empirical Analysis of Anonymity in Zcash," USENIX Security (benthamsgaze) — the
-  value-linkage precedent, **28.5% of coins linked** (`[VERIFIED]` in-tree).
+  value-linkage precedent, **28.5% of coins linked**. This is a real published USENIX paper
+  (firm ground, unlike the withdrawn 34.7% preprint), but the specific number is **supporting
+  color, not load-bearing** — the core argument (variable fee → distinguishable payout) is a
+  *structural fact about the code*, independent of any percentage. **[Confirm the 28.5% against
+  the Kappos primary before it appears in the final bounty submission.]**
 - **Primary adversary framing:** `anonymity-frontier-and-antisybil.md` §2.5 — the passive
   on-chain observer.
 - **Priority-fee advisory (adjacent, NOT a build):** Solana relayer priority-fee as a
