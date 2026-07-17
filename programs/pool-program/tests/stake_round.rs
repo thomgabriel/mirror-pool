@@ -1,7 +1,8 @@
 #![allow(deprecated)]
 mod round_support;
 use round_support::{
-    build_stake_round_fixture, commit_intent_tx, program_id, stake_pool_denomination,
+    build_stake_round_fixture, build_stake_round_fixture_signer_recipients, commit_intent_tx,
+    program_id, stake_pool_denomination,
 };
 
 use anchor_lang::AccountDeserialize;
@@ -561,4 +562,105 @@ fn execute_round_stake_prefund_uniformity_both_directions() {
         delegated_amounts.windows(2).all(|w| w[0] == w[1]),
         "delegations must stay identical despite pre-funding in both directions: {delegated_amounts:?}"
     );
+}
+
+// `cancel_intent` is generic across action kinds: it never touches the stake
+// account (that's only created at execute), so a stake-pool intent cancels
+// exactly like a withdraw-pool intent — refund, decremented count, closed
+// intent PDA, nullifier stays burned.
+#[test]
+fn cancel_intent_works_on_stake_pool() {
+    let stake_fee = 5_000u64;
+    let (mut fx, recipients) = build_stake_round_fixture_signer_recipients(2, 1, stake_fee);
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 0, 0))
+        .unwrap();
+
+    let recipient = &recipients[0];
+    let before = fx
+        .svm
+        .get_account(&recipient.pubkey())
+        .map(|a| a.lamports())
+        .unwrap_or(0);
+
+    let round_id = 0u64;
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", fx.pool.as_ref(), &round_id.to_le_bytes()],
+        &program_id(),
+    );
+    let mut data = round_support::disc("cancel_intent").to_vec();
+    data.extend_from_slice(&round_id.to_le_bytes());
+    data.extend_from_slice(&fx.intents[0].nullifier_hash);
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(fx.pool, false),
+            AccountMeta::new(round, false),
+            AccountMeta::new(fx.intents[0].intent_pda, false),
+            AccountMeta::new(fx.vault, false),
+            AccountMeta::new(recipient.pubkey(), true),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+    fx.svm.expire_blockhash();
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            ix,
+        ],
+        Some(&fx.payer.pubkey()),
+    );
+    fx.svm
+        .send_transaction(Transaction::new(
+            &[&fx.payer, recipient],
+            msg,
+            fx.svm.latest_blockhash(),
+        ))
+        .expect("recipient may cancel an open-round stake intent");
+
+    // Refunded at least the denomination (+ closed intent rent).
+    let denomination = stake_pool_denomination(stake_fee);
+    let after = fx.svm.get_account(&recipient.pubkey()).unwrap().lamports();
+    assert!(
+        after >= before + denomination,
+        "recipient refunded at least the denomination"
+    );
+
+    // Intent PDA closed (LiteSVM keeps a zero-lamport, system-owned, empty-data
+    // tombstone rather than purging it — see cancel_intent.rs's identical note).
+    match fx.svm.get_account(&fx.intents[0].intent_pda) {
+        None => {}
+        Some(acc) => {
+            assert_eq!(acc.lamports(), 0, "intent PDA drained");
+            assert_eq!(
+                acc.owner(),
+                &system_program::ID,
+                "intent PDA reassigned to system program"
+            );
+            assert!(acc.data().is_empty(), "intent PDA data cleared");
+        }
+    }
+
+    let r0 = Round::try_deserialize(&mut fx.svm.get_account(&round).unwrap().data()).unwrap();
+    assert_eq!(r0.intent_count, 0, "intent_count decremented");
+
+    // No stake account was ever created — cancel is pre-execute.
+    let pda = stake_pda(fx.pool, fx.intents[0].intent_pda);
+    assert!(
+        fx.svm.get_account(&pda).is_none(),
+        "cancel never creates a stake account"
+    );
+
+    // Nullifier stays burned: re-committing the same note must fail.
+    fx.svm.expire_blockhash();
+    let outcome = fx
+        .svm
+        .send_transaction(commit_intent_tx(&fx, 0, 0))
+        .expect_err("cancelled note stays spent (nullifier not returned)");
+    assert!(outcome
+        .meta
+        .logs
+        .iter()
+        .any(|l| l.contains("already in use")));
 }

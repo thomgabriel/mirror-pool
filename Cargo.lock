@@ -4869,6 +4869,7 @@ dependencies = [
 name = "sdk"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "ext-data",
  "litesvm",
  "pool-program",

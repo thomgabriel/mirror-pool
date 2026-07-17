@@ -604,6 +604,160 @@ pub fn build_stake_round_fixture(k_floor: u16, n: usize, stake_fee: u64) -> Roun
     }
 }
 
+/// Like `build_stake_round_fixture`, but each intent's recipient is a keypair
+/// we control (needed by `cancel_intent`, where the recipient must sign — see
+/// `build_round_fixture_signer_recipients`'s withdraw-pool counterpart).
+/// Returns the fixture plus the recipient keypairs (index-aligned with
+/// `intents`).
+pub fn build_stake_round_fixture_signer_recipients(
+    k_floor: u16,
+    n: usize,
+    stake_fee: u64,
+) -> (RoundFixture, Vec<Keypair>) {
+    let build_dir = ensure_build_artifacts();
+
+    let denomination = stake_pool_denomination(stake_fee);
+
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 100_000_000_000).unwrap();
+    svm.add_program_from_file(program_id(), so_path()).unwrap();
+
+    let validator = create_validator_vote_account(&mut svm, &payer);
+
+    let mint = Pubkey::new_unique();
+    let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
+    let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round0, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+
+    // initialize_pool(denomination, k_floor, action_kind=1, validator, stake_fee)
+    let mut data = disc("initialize_pool").to_vec();
+    data.extend_from_slice(&denomination.to_le_bytes());
+    data.extend_from_slice(&k_floor.to_le_bytes());
+    data.push(1u8);
+    data.extend_from_slice(&validator.to_bytes());
+    data.extend_from_slice(&stake_fee.to_le_bytes());
+    send(
+        &mut svm,
+        &payer,
+        &[&payer],
+        Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(pool, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(round0, false),
+                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new_readonly(system_program::ID, false),
+            ],
+            data,
+        },
+    );
+
+    let notes: Vec<Note> = (0..n).map(|_| Note::new()).collect();
+    let mut tree = MerkleTree::new().unwrap();
+    for note in &notes {
+        let commitment = note.commitment();
+        tree.insert(commitment);
+        let mut d = disc("deposit").to_vec();
+        d.extend_from_slice(&commitment);
+        d.extend_from_slice(&denomination.to_le_bytes());
+        send(
+            &mut svm,
+            &payer,
+            &[&payer],
+            Instruction {
+                program_id: program_id(),
+                accounts: vec![
+                    AccountMeta::new(pool, false),
+                    AccountMeta::new(vault, false),
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                ],
+                data: d,
+            },
+        );
+    }
+
+    let root = tree.root();
+    let mut intents = Vec::with_capacity(n);
+    let mut recipient_keypairs = Vec::with_capacity(n);
+    for (i, note) in notes.iter().enumerate() {
+        let recipient_kp = Keypair::new();
+        let recipient = recipient_kp.pubkey();
+        svm.airdrop(&recipient, 1_000_000).unwrap();
+        let relayer = Pubkey::new_unique();
+        let path = tree.authentication_path(i);
+        let ext = sdk::compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), stake_fee);
+        let inputs = sdk::WithdrawInputs {
+            root,
+            nullifier_hash: note.nullifier_hash(),
+            ext_data_hash: ext,
+            nullifier: note.nullifier(),
+            secret: note.secret(),
+            path_elements: path.elements,
+            path_indices: path.indices,
+        };
+        let (proof, public_inputs) = prover::prove_withdraw(
+            build_dir.join("withdraw_js").join("withdraw.wasm"),
+            build_dir.join("withdraw.r1cs"),
+            build_dir.join("withdraw.zkey"),
+            &inputs,
+        )
+        .expect("proving a fresh note must succeed");
+        let withdraw_proof = WithdrawProof {
+            a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
+            b: prover::g2_to_solana_be(&proof.b).unwrap(),
+            c: prover::g1_to_solana_be(&proof.c).unwrap(),
+        };
+        let (intent_pda, _) = Pubkey::find_program_address(
+            &[
+                b"intent",
+                pool.as_ref(),
+                public_inputs.nullifier_hash.as_ref(),
+            ],
+            &program_id(),
+        );
+        let (nullifier_pda, _) = Pubkey::find_program_address(
+            &[
+                b"nullifier",
+                pool.as_ref(),
+                public_inputs.nullifier_hash.as_ref(),
+            ],
+            &program_id(),
+        );
+        intents.push(IntentMaterial {
+            note: *note,
+            proof: withdraw_proof,
+            root: public_inputs.root,
+            nullifier_hash: public_inputs.nullifier_hash,
+            recipient,
+            relayer,
+            fee: stake_fee,
+            intent_pda,
+            nullifier_pda,
+        });
+        recipient_keypairs.push(recipient_kp);
+    }
+
+    (
+        RoundFixture {
+            svm,
+            payer,
+            pool,
+            vault,
+            k_floor,
+            intents,
+            validator,
+        },
+        recipient_keypairs,
+    )
+}
+
 /// Build a `commit_intent` transaction for intent `i` against round `round_id`.
 pub fn commit_intent_tx(fx: &RoundFixture, i: usize, round_id: u64) -> Transaction {
     let m = &fx.intents[i];

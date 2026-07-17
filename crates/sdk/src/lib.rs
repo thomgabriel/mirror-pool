@@ -25,7 +25,7 @@ use solana_sdk::{
     hash::hash as sha256,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    system_program,
+    stake, system_program, sysvar,
 };
 
 pub use ext_data::ext_data_hash as compute_ext_data_hash;
@@ -411,6 +411,70 @@ pub fn build_execute_round_ix(
         accounts.push(AccountMeta::new(*recipient, false));
         accounts.push(AccountMeta::new(*relayer, false));
     }
+    let mut data = discriminator("execute_round").to_vec();
+    data.extend_from_slice(&round_id.to_le_bytes());
+    Instruction {
+        program_id: pool_program::ID,
+        accounts,
+        data,
+    }
+}
+
+/// The PDA for an intent's stake account (`["stake", pool, intent_pda]`),
+/// seeded off the INTENT PDA key itself (not the raw `nullifier_hash`) —
+/// matches the on-chain stake dispatch arm in
+/// `programs/pool-program/src/round.rs::execute_round`.
+pub fn stake_account_pda(pool: Pubkey, intent_pda: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"stake", pool.as_ref(), intent_pda.as_ref()],
+        &pool_program::ID,
+    )
+    .0
+}
+
+/// Builds `execute_round` for a STAKE pool (`pool.action_kind == 1`). `intents`
+/// is `(intent_pda, stake_account_pda, relayer)` per committed intent, in any
+/// order; the shared tail `[validator, stake_program, stake_config, clock,
+/// stake_history, rent]` is appended automatically. A separate builder from
+/// `build_execute_round_ix` (rather than a shared/branching one) because the
+/// two pool kinds need structurally different `remaining_accounts` shapes and
+/// this is still the only caller of either.
+#[allow(deprecated)] // `stake::config::ID` — the Stake program still requires this account in DelegateStake's CPI even though the type is deprecated.
+pub fn build_execute_stake_round_ix(
+    pool: Pubkey,
+    vault: Pubkey,
+    cranker: Pubkey,
+    round_id: u64,
+    validator: Pubkey,
+    intents: &[(Pubkey, Pubkey, Pubkey)],
+) -> Instruction {
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &round_id.to_le_bytes()],
+        &pool_program::ID,
+    );
+    let (next_round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &(round_id + 1).to_le_bytes()],
+        &pool_program::ID,
+    );
+    let mut accounts = vec![
+        AccountMeta::new(pool, false),
+        AccountMeta::new(round, false),
+        AccountMeta::new(next_round, false),
+        AccountMeta::new(vault, false),
+        AccountMeta::new(cranker, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    for (intent, stake_account, relayer) in intents {
+        accounts.push(AccountMeta::new(*intent, false));
+        accounts.push(AccountMeta::new(*stake_account, false));
+        accounts.push(AccountMeta::new(*relayer, false));
+    }
+    accounts.push(AccountMeta::new_readonly(validator, false));
+    accounts.push(AccountMeta::new_readonly(stake::program::ID, false));
+    accounts.push(AccountMeta::new_readonly(stake::config::ID, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::clock::ID, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::stake_history::ID, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::rent::ID, false));
     let mut data = discriminator("execute_round").to_vec();
     data.extend_from_slice(&round_id.to_le_bytes());
     Instruction {
