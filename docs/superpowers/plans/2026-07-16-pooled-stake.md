@@ -18,12 +18,13 @@ Every task's requirements implicitly include this section. Copy exact values ver
 - **Custody fail-closed.** On-chain paths return typed `PoolError`s. No `unwrap()`/`expect()`/`panic!` on attacker-influenced input. Checked arithmetic / `require!` for every amount, index, count. The value split MUST conserve value: `denomination = stake_fee + stake_rent + delegated`, never over-drain the vault.
 - **`k`-floor enforced ON-CHAIN, unchanged.** `execute_round` still rejects `intent_count < k_floor`. The stake path does not weaken any Plan 4 guarantee (uniform actor, single-spend, replay, no redirection).
 - **Uniform actor + unlinkable identity.** All delegations of a round happen in ONE vault-signed transaction to the SAME validator for the SAME amount; the per-participant stake-account PDA + authority necessarily differ but are ZK-unlinkable (the withdraw privacy model). Do NOT assert byte-identity on the identity fields.
+- **Uniformity is the product — "executes" is not enough, "executes IDENTICALLY" is.** In this protocol the observable outputs of every intent in a round (delegated amount, validator, action shape) must be byte-for-byte equal; any per-intent divergence an outsider can measure de-anonymizes that intent. A hardening change that only restores *liveness* (the account exists / the round completes) is INCOMPLETE until it also restores *uniformity*. Concretely: because the stake PDA is derived from a fully public seed chain (`nullifier_hash → intent_pda → stake_pda`), an attacker can pre-fund a chosen victim's stake account — so `StakeAction` must normalize the balance to EXACTLY `to_stake` in both directions before delegating, not merely tolerate a pre-fund. Apply this lens to every future `PooledAction` adapter.
 - **A pool is ONE action kind.** A round must never mix withdraw and stake intents (trivially distinguishable). `action_kind` lives on the `Pool`; `execute_round` dispatches on it.
 - **Error variants are APPEND-ONLY.** Append every new variant AFTER the current last one (`DuplicateIntent`) — never insert/reorder (hardcoded codes in `deposit.rs` 6001/6002 depend on it).
 - **`Pool` stays `zero_copy` / `repr(C)` with NO implicit padding** (bytemuck `Pod` rejects it) and `size_of::<Pool>()` a multiple of 8 — same discipline as Plan 4's tail fields. New fields are appended to the tail; all existing `offset_of!` sites stay valid.
 - **Stake value split (verified):** the stake account is funded with `denomination − stake_fee`; DelegateStake stakes its balance above the rent-exempt reserve, so `delegated = denomination − stake_fee − stake_rent`. A **Stake** pool is valid only if `delegated ≥ MIN_STAKE_DELEGATION` (1 SOL = 1_000_000_000 lamports on mainnet, `getStakeMinimumDelegation`) — enforced fail-closed at `initialize_pool`; `DelegateStake` is the ultimate enforcer at execute.
 - **Never log/emit secrets.** No note secret, nullifier preimage, or member→action mapping.
-- **Tests are Rust-native** (host unit + LiteSVM). Adversarial/negative cases mandatory (sub-k, substituted authority, foreign-pool/round intent, duplicate, wrong stake PDA, re-execute). The **withdraw suite must stay green** (seam-regression proof).
+- **Tests are Rust-native** (host unit + LiteSVM). Adversarial/negative cases mandatory (sub-k, substituted relayer, foreign-pool/round intent, duplicate, wrong stake PDA, re-execute, non-matching stake fee) **plus a uniformity case: a stake PDA pre-funded ABOVE `to_stake` still delegates the round's identical amount** (the excess-sweep). The **withdraw suite must stay green** (seam-regression proof).
 - A change isn't done until `cargo test -p <crate>` is green and you've said so with the output.
 
 ---
@@ -344,12 +345,17 @@ impl PooledAction for StakeAction<'_, '_> {
             .checked_sub(fee)
             .ok_or(error!(crate::PoolError::FeeExceedsDenomination))?;
 
-        // 1. Create the stake PDA — DoS-ROBUST. The PDA seed (`nullifier_hash`) is
-        //    PUBLIC, so an attacker can pre-fund the address with dust; a raw
-        //    `create_account` then fails "already in use" and bricks every round.
-        //    Mirror Anchor's own `init` fallback: if already funded, top up + allocate
-        //    + assign (an attacker can only ADD lamports to a system account, never
-        //    allocate/assign our PDA).
+        // 1. Create the stake PDA — DoS-ROBUST *and amount-exact*. The PDA seed chain
+        //    is PUBLIC (nullifier_hash → intent_pda → stake_pda), so an attacker can
+        //    pre-fund the address. A raw `create_account` then fails "already in use"
+        //    and bricks every round (liveness). Mirror Anchor's own `init` fallback —
+        //    but the account must end with EXACTLY `to_stake`, not just "exist": if a
+        //    pre-fund is left in place the intent delegates a different amount than the
+        //    round and becomes distinguishable on-chain (privacy — see the uniformity
+        //    note above the Global Constraints). So normalize the balance to `to_stake`
+        //    in BOTH directions before allocate. An attacker can only ADD lamports to a
+        //    system account (never allocate/assign our PDA), and while the account is
+        //    still system-owned + data-empty our program can sign for it to move them.
         let existing = self.stake_account.lamports();
         let size = crate::invariants::STAKE_ACCOUNT_SIZE as u64;
         if existing == 0 {
@@ -361,11 +367,22 @@ impl PooledAction for StakeAction<'_, '_> {
                 &[self.vault_seeds[0], self.stake_seeds[0]],
             )?;
         } else {
+            // Normalize to EXACTLY to_stake before allocate (system transfer refuses a
+            // data-carrying account, so this must precede allocate).
             if to_stake > existing {
+                // dusted below target → vault tops up
                 invoke_signed(
                     &system_instruction::transfer(self.vault.key, self.stake_account.key, to_stake - existing),
                     &[self.vault.clone(), self.stake_account.clone(), self.system_program.clone()],
                     self.vault_seeds,
+                )?;
+            } else if existing > to_stake {
+                // pre-funded ABOVE target → sweep the excess back to the vault (the grief
+                // becomes a donation), else this intent delegates more than the round.
+                invoke_signed(
+                    &system_instruction::transfer(self.stake_account.key, self.vault.key, existing - to_stake),
+                    &[self.stake_account.clone(), self.vault.clone(), self.system_program.clone()],
+                    &[self.stake_seeds[0]],
                 )?;
             }
             invoke_signed(
@@ -458,6 +475,7 @@ Make `execute_round` branch on `pool.action_kind`, parse the stake `remaining_ac
 Create `programs/pool-program/tests/stake_round.rs`. Use a `round_support` helper that (a) creates a validator **vote account** in the SVM (via `litesvm`'s `set_account` with a serialized `VoteState`, or the Vote program CreateAccount), (b) initializes a **Stake** pool at that validator, (c) deposits + commits k notes with stake authorities. The test then builds `execute_round` with the stake `remaining_accounts` and asserts:
 ```rust
 // after execute_round on a k=2 stake pool:
+let mut delegated_amounts = Vec::new();
 for m in &fx.intents {
     // stake PDA is seeded off the INTENT PDA key, not nullifier_hash directly.
     let (intent_pda, _) = Pubkey::find_program_address(
@@ -470,7 +488,11 @@ for m in &fx.intents {
     // `bincode::deserialize::<StakeStateV2>(&acct.data)` (or solana_sdk::stake::state
     // helpers). Assert delegation.voter_pubkey == validator, and
     // authorized.staker == authorized.withdrawer == m.recipient (post-Authorize).
+    // Capture delegation.stake for the uniformity check below.
+    delegated_amounts.push(/* delegation.stake from the deserialized StakeStateV2 */);
 }
+// Amount-uniformity (the product): every intent delegated the SAME amount.
+assert!(delegated_amounts.windows(2).all(|w| w[0] == w[1]), "delegations must be identical");
 // vault debited exactly k * denomination (fee to relayer + rest into stake accounts).
 ```
 Plus adversarial tests (full code, mirroring `execute_round.rs`). Note the recipient is CPI *data*, not a passed account, so there is no "authority account" to substitute — the real substitution surfaces are the relayer and the stake account:
@@ -479,7 +501,7 @@ Plus adversarial tests (full code, mirroring `execute_round.rs`). Note the recip
 - a **wrong stake-account PDA** (not `["stake", pool, intent_pda]`) → `StakeAccountInvalid`;
 - a foreign-pool crafted `Intent` → `IntentInvalid`;
 - a duplicated intent → `DuplicateIntent`;
-- **a pre-funded (dusted) stake PDA still executes** (C2 robustness — send 1 lamport to the derived stake PDA before execute, assert the round still completes and the stake account ends up owned by the Stake program);
+- **a pre-funded stake PDA still executes AND stays uniform** — cover BOTH directions in one test: dust one intent's derived stake PDA *below* `to_stake` (e.g. 1 lamport → vault tops up) and pre-fund another *above* `to_stake` (e.g. `to_stake + 0.5 SOL` → excess swept to vault); after execute, assert the round completed, both stake accounts are owned by the Stake program, and **`delegation.stake` is identical across every intent in the round** (the amount-uniformity invariant — the 1-lamport-only case would pass even with the bug, so the above-target case is the one that matters);
 - re-execute the same round → the `next_round` init-collision guard rejects it.
 
 Run: `cargo test -p pool-program --test stake_round`
@@ -635,7 +657,7 @@ git commit -m "feat(sdk): pooled-stake builders + e2e; cancel_intent works on st
 - §2.2 account budget (3/intent + 6 shared → k≈17) → Task 3's stake layout `count*3 + 6`.
 - §6 value split `delegated = denomination − stake_fee − stake_rent` + the `≥ MIN_STAKE_DELEGATION` validity floor → `invariants::stake_split` (Task 1) + `initialize_pool` validity + `DelegateStake` at execute.
 - §6 fixed per-pool fee (amount uniformity) → `Pool.stake_fee` + init validity; **`commit_intent`'s `fee == pool.stake_fee` guard on stake pools → Task 1 Step 6** (+ a negative test), with a defense-in-depth re-check in the execute stake arm (Task 3).
-- §4 threat deltas (authority redirection, non-uniform batch, sub-k, whale-self-fill residual) → Task 3 adversarial tests + the honest residual (documented, not tested — it's a stated tradeoff). The dust-griefing DoS on the stake PDA (public seed) is closed by the robust create-or-adopt path in `StakeAction` (Task 2) and proven by the pre-funded-PDA test (Task 3).
+- §4 threat deltas (authority redirection, non-uniform batch, sub-k, whale-self-fill residual) → Task 3 adversarial tests + the honest residual (documented, not tested — it's a stated tradeoff). The public-seed pre-funding attack on the stake PDA is closed on BOTH axes by `StakeAction` (Task 2): *liveness* (a dusted PDA no longer bricks the round — create-or-adopt) and *privacy* (the balance is normalized to exactly `to_stake` in both directions, so a pre-fund above target can't make one intent delegate more than the round), proven by Task 3's two-directional pre-fund + delegation-uniformity assertion.
 - §5 testing (happy + adversarial + cancel + **withdraw seam regression**) → Tasks 3-4.
 
 **2. Placeholder scan:** No open placeholders remain — the review folded the `recipient: Pubkey` decision into Task 2's `StakeAction` and the stake-PDA-seed decision (`["stake", pool, intent_pda]`, no `Intent` change) into Task 3's dispatch, so no task is knowingly-wrong in isolation. Task 1 Steps 6/8 and Task 3 Step 1 describe test bodies in prose with the exact asserts; the implementer writes them in full using the named existing helpers.
