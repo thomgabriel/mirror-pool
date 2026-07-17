@@ -182,6 +182,7 @@ pub mod pool_program {
             1 => crate::round::ActionKind::Stake,
             _ => return err!(PoolError::WrongActionConfig),
         };
+        intent.committed_slot = Clock::get()?.slot;
 
         let round = &mut ctx.accounts.round;
         round.intent_count = round
@@ -207,6 +208,13 @@ pub mod pool_program {
             ctx.accounts.round.state == crate::round::RoundState::Open,
             PoolError::RoundClosed
         );
+
+        // Timeout gate: a committed intent is uncancelable until TIMEOUT_SLOTS
+        // slots after its own commit. Removes the instant commit->cancel exit and
+        // makes "committed for N slots" enforced; cancel remains a linkable sub-k
+        // exit by construction once the window opens (see the spec's claim list).
+        let unlock = crate::invariants::cancel_unlock_slot(ctx.accounts.intent.committed_slot)?;
+        require!(Clock::get()?.slot >= unlock, PoolError::CancelTooEarly);
 
         let (denomination, vault_bump) = {
             let pool = ctx.accounts.pool.load()?;
@@ -683,4 +691,6 @@ pub enum PoolError {
     StakeDenominationTooLow,
     #[msg("account does not match the pool's configured stake action")]
     StakeAccountInvalid,
+    #[msg("intent cannot be cancelled until its commit timeout has elapsed")]
+    CancelTooEarly,
 }

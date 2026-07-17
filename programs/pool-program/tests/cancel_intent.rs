@@ -5,9 +5,11 @@ use round_support::{
 };
 
 use anchor_lang::AccountDeserialize;
+use pool_program::round::Intent;
 use pool_program::round::Round;
 use solana_sdk::{
     account::ReadableAccount,
+    clock::Clock,
     compute_budget::ComputeBudgetInstruction,
     instruction::{AccountMeta, Instruction, InstructionError},
     message::Message,
@@ -51,6 +53,10 @@ fn cancel_intent_refunds_and_decrements() {
     fx.svm
         .send_transaction(commit_intent_tx(&fx, 0, 0))
         .unwrap();
+
+    let committed = fx.svm.get_sysvar::<Clock>().slot;
+    fx.svm
+        .warp_to_slot(committed + pool_program::invariants::TIMEOUT_SLOTS);
 
     let recipient = &recipients[0];
     let before = fx
@@ -150,4 +156,82 @@ fn cancel_intent_rejects_wrong_signer() {
         outcome.err,
         TransactionError::InstructionError(_, InstructionError::Custom(_))
     ));
+}
+
+const BASE_SLOT: u64 = 10_000; // nonzero, so an unwritten committed_slot (0) fails the reject test
+
+fn cancel_tx(fx: &round_support::RoundFixture, recipient: &Keypair) -> Transaction {
+    let ix = cancel_ix(fx, 0, 0, recipient.pubkey());
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            ix,
+        ],
+        Some(&fx.payer.pubkey()),
+    );
+    Transaction::new(&[&fx.payer, recipient], msg, fx.svm.latest_blockhash())
+}
+
+#[test]
+fn cancel_rejected_before_timeout() {
+    let (mut fx, recipients) = build_round_fixture_signer_recipients(2, 1);
+    fx.svm.warp_to_slot(BASE_SLOT);
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 0, 0))
+        .unwrap();
+
+    // The intent recorded committed_slot == BASE_SLOT. One slot before unlock → locked.
+    fx.svm
+        .warp_to_slot(BASE_SLOT + pool_program::invariants::TIMEOUT_SLOTS - 1);
+    fx.svm.expire_blockhash();
+    let err = fx
+        .svm
+        .send_transaction(cancel_tx(&fx, &recipients[0]))
+        .unwrap_err();
+    assert!(
+        format!("{err:?}").contains("CancelTooEarly"),
+        "expected CancelTooEarly before the timeout, got: {err:?}"
+    );
+}
+
+#[test]
+fn cancel_allowed_at_timeout() {
+    let (mut fx, recipients) = build_round_fixture_signer_recipients(2, 1);
+    fx.svm.warp_to_slot(BASE_SLOT);
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 0, 0))
+        .unwrap();
+
+    // Prove commit_intent wrote the current clock slot (not a default).
+    let acct = fx.svm.get_account(&fx.intents[0].intent_pda).unwrap();
+    let intent = Intent::try_deserialize(&mut acct.data()).unwrap();
+    assert_eq!(
+        intent.committed_slot, BASE_SLOT,
+        "commit_intent records the clock slot"
+    );
+
+    // Exactly at the unlock slot → cancelable.
+    fx.svm
+        .warp_to_slot(BASE_SLOT + pool_program::invariants::TIMEOUT_SLOTS);
+    fx.svm.expire_blockhash();
+    fx.svm
+        .send_transaction(cancel_tx(&fx, &recipients[0]))
+        .expect("cancel must succeed once the timeout has elapsed");
+    // Intent PDA closed (rent-swept) confirms the refund/close path ran.
+    // LiteSVM 0.6.1 never purges zero-lamport accounts from its in-memory
+    // store, so a closed PDA still shows up as `Some` here (unlike a real
+    // validator, which drops it). The on-chain signal for "closed" is
+    // zero lamports + reassigned to the system program + zeroed data.
+    match fx.svm.get_account(&fx.intents[0].intent_pda) {
+        None => {}
+        Some(acc) => {
+            assert_eq!(acc.lamports(), 0, "intent PDA drained");
+            assert_eq!(
+                acc.owner(),
+                &system_program::ID,
+                "intent PDA reassigned to system program"
+            );
+            assert!(acc.data().is_empty(), "intent PDA data cleared");
+        }
+    }
 }

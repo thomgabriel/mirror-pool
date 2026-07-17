@@ -10,6 +10,7 @@ use pool_program::round::{Round, RoundState};
 use solana_sdk::stake::state::StakeStateV2;
 use solana_sdk::{
     account::ReadableAccount,
+    clock::Clock,
     compute_budget::ComputeBudgetInstruction,
     instruction::{AccountMeta, Instruction, InstructionError},
     message::Message,
@@ -394,6 +395,7 @@ fn execute_round_stake_rejects_intent_from_another_pool() {
         relayer: Pubkey::new_unique(),
         fee: stake_fee,
         action: ActionKind::Stake,
+        committed_slot: 0,
     };
     let mut data = Vec::new();
     foreign.try_serialize(&mut data).unwrap();
@@ -482,6 +484,7 @@ fn execute_round_stake_rejects_wrong_fee() {
         relayer: Pubkey::new_unique(),
         fee: stake_fee + 1, // NOT pool.stake_fee
         action: ActionKind::Stake,
+        committed_slot: 0,
     };
     let mut data = Vec::new();
     wrong_fee.try_serialize(&mut data).unwrap();
@@ -663,6 +666,10 @@ fn cancel_intent_works_on_stake_pool() {
     fx.svm
         .send_transaction(commit_intent_tx(&fx, 0, 0))
         .unwrap();
+
+    let committed = fx.svm.get_sysvar::<Clock>().slot;
+    fx.svm
+        .warp_to_slot(committed + pool_program::invariants::TIMEOUT_SLOTS);
 
     let recipient = &recipients[0];
     let before = fx

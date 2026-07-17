@@ -50,6 +50,22 @@ pub fn stake_split(denomination: u64, stake_fee: u64, stake_rent: u64) -> Result
     Ok((delegated, stake_fee))
 }
 
+/// Slots a committed intent stays uncancelable, counted from its own commit.
+/// ~1h at 400 ms/slot. A workload-contingent judgment call, not a derived number:
+/// it means anything only if it is >= a credible fill horizon so that "the round
+/// failed" is plausible by the time cancel opens. Promote to a bounded per-pool
+/// config when fill horizons diverge (already true for stake vs withdraw); kept a
+/// const here to avoid unused config surface.
+pub const TIMEOUT_SLOTS: u64 = 9_000;
+
+/// Earliest slot at which an intent committed at `committed_slot` may be cancelled.
+/// Fails closed on overflow (cannot cancel) rather than wrapping.
+pub fn cancel_unlock_slot(committed_slot: u64) -> Result<u64> {
+    committed_slot
+        .checked_add(TIMEOUT_SLOTS)
+        .ok_or(error!(PoolError::CancelTooEarly))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +119,28 @@ mod stake_tests {
     #[test]
     fn stake_split_rejects_fee_plus_rent_over_denomination() {
         assert!(stake_split(1_000, 900, 200).is_err());
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::*;
+
+    #[test]
+    fn cancel_unlock_slot_adds_timeout() {
+        assert_eq!(cancel_unlock_slot(0).unwrap(), TIMEOUT_SLOTS);
+        assert_eq!(cancel_unlock_slot(1_000).unwrap(), 1_000 + TIMEOUT_SLOTS);
+    }
+
+    #[test]
+    fn cancel_unlock_slot_overflow_fails_closed() {
+        // committed_slot so large that +TIMEOUT_SLOTS overflows u64 → cannot cancel.
+        assert!(cancel_unlock_slot(u64::MAX).is_err());
+        assert!(cancel_unlock_slot(u64::MAX - TIMEOUT_SLOTS + 1).is_err());
+        // exactly representable boundary still succeeds:
+        assert_eq!(
+            cancel_unlock_slot(u64::MAX - TIMEOUT_SLOTS).unwrap(),
+            u64::MAX
+        );
     }
 }
