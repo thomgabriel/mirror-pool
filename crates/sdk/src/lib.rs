@@ -422,8 +422,8 @@ pub fn build_execute_round_ix(
 
 /// The PDA for an intent's stake account (`["stake", pool, intent_pda]`),
 /// seeded off the INTENT PDA key itself (not the raw `nullifier_hash`) —
-/// matches the on-chain stake dispatch arm in
-/// `programs/pool-program/src/round.rs::execute_round`.
+/// matches the on-chain stake dispatch arm in `execute_round`
+/// (`programs/pool-program/src/lib.rs`).
 pub fn stake_account_pda(pool: Pubkey, intent_pda: Pubkey) -> Pubkey {
     Pubkey::find_program_address(
         &[b"stake", pool.as_ref(), intent_pda.as_ref()],
