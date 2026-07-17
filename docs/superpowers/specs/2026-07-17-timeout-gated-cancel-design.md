@@ -117,11 +117,25 @@ The gate uses the Clock sysvar's **slot** number.
 - **A companion round-expiry / force-advance path.** `current_round_id` only
   advances on `execute_round`, so a failed round is never explicitly closed. We
   checked whether the gate needs to also expire/advance a timed-out round:
-  **it does not.** New commits accumulate toward `k` in the *same* open round,
-  and the gate rate-limits yanks, so a sustained `k` lets the crank slip through
-  — a stuck round self-heals as long as honest arrivals outpace the (now-costly)
-  yanks. A permanent stall requires arrivals to cease entirely, which is a
-  crowd-depth problem owned by the incentive/coordinator layer, not this gate.
+  **it does not — but not for the tidy reason an earlier draft claimed.** In the
+  common case, new commits accumulate toward `k` in the *same* open round and the
+  gate rate-limits yanks, so a sustained `k` lets the crank slip through. That is
+  NOT a general self-heal: `execute_round` must pass **every** live intent of the
+  round as `remaining_accounts` (`rem.len() == count*3` (+6 for stake)), so once
+  `intent_count` is inflated past the per-transaction account/size ceiling (~dozens
+  of intents, even with ALTs), `execute_round` becomes permanently unconstructable
+  — and since `commit_intent` funnels all new commits into that same stuck
+  `current_round_id`, the pool degrades to deposit-and-(timeout-)cancel-only with
+  the anonymity round dead. This is reachable with honest arrivals *continuing*
+  (an accidental overshoot before the crank fires, or a griefer who locks capital
+  in `>ceiling` uncanceled intents), so the claim "a permanent stall requires
+  arrivals to cease" is FALSE. Crucially, this brick is a **pre-existing property
+  of `execute_round`'s single-transaction batch** — the timeout gate neither
+  creates nor worsens it (funds remain recoverable via cancel after `N`; no custody
+  loss). The correct scoping: a per-transaction `k`-ceiling / round-sealing / chunked
+  executor is a **separate, already-deferred concern** (see the deferred list in the
+  behavioral-rounds design and Plan 4's ledger), NOT something a self-heal argument
+  discharges. This gate simply does not interact with it.
 - **Per-pool timeout config.** Deferred to a bounded-config promotion (see the
   const caveat); a single honestly-caveated const is the YAGNI choice now.
 - **Making cancel unlinkable / removing the sub-k exit entirely.** Impossible
@@ -130,7 +144,13 @@ The gate uses the Clock sysvar's **slot** number.
 ## Data-model & code changes
 
 - `Intent` gains `committed_slot: u64` (`round.rs`; `Intent::SPACE` 121 → 129),
-  set in `commit_intent` from `Clock::get()?.slot`.
+  set in `commit_intent` from `Clock::get()?.slot`. **Migration note:** the size
+  change is not backward-compatible with any already-created 121-byte `Intent`
+  account — such an account would fail Borsh deserialization (fails *closed* — an
+  io error, never silent garbage), leaving it both un-cancelable and un-executable.
+  This is moot for the current pre-launch state (no live custody data), but this
+  change MUST land before any deployment that carries live intents; a live-state
+  migration is out of scope here.
 - `commit_intent`: after recording the intent, set `intent.committed_slot`.
 - `invariants.rs` gains a **pure, host-tested** `cancel_unlock_slot` alongside
   `TIMEOUT_SLOTS` — the earliest cancelable slot, computed fail-closed. Putting it
