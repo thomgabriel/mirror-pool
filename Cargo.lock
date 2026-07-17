@@ -3964,6 +3964,7 @@ name = "pool-program"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "bincode",
  "blake3",
  "bytemuck",
  "ext-data",
@@ -3974,6 +3975,7 @@ dependencies = [
  "serde_json",
  "solana-poseidon",
  "solana-sdk",
+ "solana-stake-interface",
 ]
 
 [[package]]
@@ -4867,6 +4869,7 @@ dependencies = [
 name = "sdk"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "ext-data",
  "litesvm",
  "pool-program",

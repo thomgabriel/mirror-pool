@@ -45,6 +45,9 @@ fn setup_pool(denomination: u64) -> (LiteSVM, Keypair, Pubkey, Pubkey) {
     let mut data = disc("initialize_pool").to_vec();
     data.extend_from_slice(&denomination.to_le_bytes());
     data.extend_from_slice(&2u16.to_le_bytes());
+    data.push(0u8);
+    data.extend_from_slice(&Pubkey::default().to_bytes());
+    data.extend_from_slice(&0u64.to_le_bytes());
     let ix = Instruction {
         program_id: program_id(),
         accounts: vec![

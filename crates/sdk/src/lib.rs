@@ -25,7 +25,7 @@ use solana_sdk::{
     hash::hash as sha256,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    system_program,
+    stake, system_program, sysvar,
 };
 
 pub use ext_data::ext_data_hash as compute_ext_data_hash;
@@ -133,6 +133,7 @@ fn discriminator(name: &str) -> [u8; 8] {
 
 /// Builds the `initialize_pool` instruction. Account order/writability
 /// matches `programs/pool-program/src/lib.rs`'s `InitializePool` context.
+#[allow(clippy::too_many_arguments)]
 pub fn build_initialize_pool_ix(
     pool: Pubkey,
     vault: Pubkey,
@@ -141,10 +142,16 @@ pub fn build_initialize_pool_ix(
     payer: Pubkey,
     denomination: u64,
     k_floor: u16,
+    action_kind: u8,
+    validator: Pubkey,
+    stake_fee: u64,
 ) -> Instruction {
     let mut data = discriminator("initialize_pool").to_vec();
     data.extend_from_slice(&denomination.to_le_bytes());
     data.extend_from_slice(&k_floor.to_le_bytes());
+    data.push(action_kind);
+    data.extend_from_slice(&validator.to_bytes());
+    data.extend_from_slice(&stake_fee.to_le_bytes());
     Instruction {
         program_id: pool_program::ID,
         accounts: vec![
@@ -413,6 +420,76 @@ pub fn build_execute_round_ix(
     }
 }
 
+/// The PDA for an intent's stake account (`["stake", pool, intent_pda]`),
+/// seeded off the INTENT PDA key itself (not the raw `nullifier_hash`) —
+/// matches the on-chain stake dispatch arm in
+/// `programs/pool-program/src/round.rs::execute_round`.
+pub fn stake_account_pda(pool: Pubkey, intent_pda: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[b"stake", pool.as_ref(), intent_pda.as_ref()],
+        &pool_program::ID,
+    )
+    .0
+}
+
+/// Builds `execute_round` for a STAKE pool (`pool.action_kind == 1`). `intents`
+/// is `(intent_pda, stake_account_pda, relayer)` per committed intent, in any
+/// order; the shared tail `[validator, stake_program, stake_config, clock,
+/// stake_history, rent]` is appended automatically. A separate builder from
+/// `build_execute_round_ix` (rather than a shared/branching one) because the
+/// two pool kinds need structurally different `remaining_accounts` shapes and
+/// this is still the only caller of either.
+///
+/// The caller MUST prepend an adequate
+/// `ComputeBudgetInstruction::set_compute_unit_limit(...)` for the round: the
+/// stake path runs 4 CPIs + a `find_program_address` per intent, measured
+/// ~55,300 CU at k=2 (`execute_round_stakes_the_batch_uniformly`); the spec's
+/// target k≈17 needs proportionally more headroom than the 400k default.
+#[allow(deprecated)] // `stake::config::ID` — the Stake program still requires this account in DelegateStake's CPI even though the type is deprecated.
+pub fn build_execute_stake_round_ix(
+    pool: Pubkey,
+    vault: Pubkey,
+    cranker: Pubkey,
+    round_id: u64,
+    validator: Pubkey,
+    intents: &[(Pubkey, Pubkey, Pubkey)],
+) -> Instruction {
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &round_id.to_le_bytes()],
+        &pool_program::ID,
+    );
+    let (next_round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &(round_id + 1).to_le_bytes()],
+        &pool_program::ID,
+    );
+    let mut accounts = vec![
+        AccountMeta::new(pool, false),
+        AccountMeta::new(round, false),
+        AccountMeta::new(next_round, false),
+        AccountMeta::new(vault, false),
+        AccountMeta::new(cranker, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    for (intent, stake_account, relayer) in intents {
+        accounts.push(AccountMeta::new(*intent, false));
+        accounts.push(AccountMeta::new(*stake_account, false));
+        accounts.push(AccountMeta::new(*relayer, false));
+    }
+    accounts.push(AccountMeta::new_readonly(validator, false));
+    accounts.push(AccountMeta::new_readonly(stake::program::ID, false));
+    accounts.push(AccountMeta::new_readonly(stake::config::ID, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::clock::ID, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::stake_history::ID, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::rent::ID, false));
+    let mut data = discriminator("execute_round").to_vec();
+    data.extend_from_slice(&round_id.to_le_bytes());
+    Instruction {
+        program_id: pool_program::ID,
+        accounts,
+        data,
+    }
+}
+
 /// Builds `cancel_intent` (recipient must sign).
 pub fn build_cancel_intent_ix(
     pool: Pubkey,
@@ -533,11 +610,25 @@ mod tests {
         let denomination = 1_000_000u64;
         let k_floor = 2u16;
 
-        let ix = build_initialize_pool_ix(pool, vault, round, mint, payer, denomination, k_floor);
+        let ix = build_initialize_pool_ix(
+            pool,
+            vault,
+            round,
+            mint,
+            payer,
+            denomination,
+            k_floor,
+            0,
+            Pubkey::default(),
+            0,
+        );
 
         assert_eq!(&ix.data[..8], &discriminator("initialize_pool"));
         assert_eq!(&ix.data[8..16], &denomination.to_le_bytes());
         assert_eq!(&ix.data[16..18], &k_floor.to_le_bytes());
+        assert_eq!(ix.data[18], 0, "action_kind");
+        assert_eq!(&ix.data[19..51], &Pubkey::default().to_bytes(), "validator");
+        assert_eq!(&ix.data[51..59], &0u64.to_le_bytes(), "stake_fee");
         assert_eq!(ix.accounts.len(), 6);
         assert_eq!(ix.accounts[4].pubkey, payer);
         assert!(ix.accounts[4].is_signer);

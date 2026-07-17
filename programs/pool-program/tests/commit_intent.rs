@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 mod round_support;
-use round_support::{build_round_fixture, commit_intent_tx, program_id};
+use round_support::{build_round_fixture, build_stake_round_fixture, commit_intent_tx, program_id};
 
 use anchor_lang::AccountDeserialize;
 use pool_program::round::{Intent, Round, RoundState};
@@ -185,4 +185,79 @@ fn commit_intent_rejects_fee_over_denomination() {
         "expected FeeExceedsDenomination; logs: {:?}",
         outcome.meta.logs
     );
+}
+
+// Plan 5 Task 1: a stake pool requires every intent's fee to exactly equal the
+// pool's configured `stake_fee` (uniform delegation amount — see lib.rs's
+// commit_intent doc note on the privacy/liveness rationale). Reuse intent 0's
+// real proof (the fee guard fires before proof verification) but set a
+// mismatched fee in the instruction data.
+#[test]
+fn commit_intent_rejects_wrong_stake_fee() {
+    let stake_fee = 5_000u64;
+    let mut fx = build_stake_round_fixture(2, 1, stake_fee);
+    let m = &fx.intents[0];
+    let (round0, _) = Pubkey::find_program_address(
+        &[b"round", fx.pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+    let bad_fee = stake_fee + 1;
+    let mut data = round_support::disc("commit_intent").to_vec();
+    data.extend_from_slice(&m.proof.a);
+    data.extend_from_slice(&m.proof.b);
+    data.extend_from_slice(&m.proof.c);
+    data.extend_from_slice(&m.root);
+    data.extend_from_slice(&m.nullifier_hash);
+    data.extend_from_slice(&bad_fee.to_le_bytes());
+    data.extend_from_slice(&0u64.to_le_bytes());
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(fx.pool, false),
+            AccountMeta::new(round0, false),
+            AccountMeta::new(m.intent_pda, false),
+            AccountMeta::new(m.nullifier_pda, false),
+            AccountMeta::new_readonly(m.recipient, false),
+            AccountMeta::new_readonly(m.relayer, false),
+            AccountMeta::new(fx.payer.pubkey(), true),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            ix,
+        ],
+        Some(&fx.payer.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(
+            &[&fx.payer],
+            msg,
+            fx.svm.latest_blockhash(),
+        ))
+        .expect_err("a stake-pool fee that doesn't match pool.stake_fee must fail closed");
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|l| l.contains("WrongActionConfig")),
+        "expected WrongActionConfig; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+#[test]
+fn commit_intent_accepts_matching_stake_fee() {
+    let stake_fee = 5_000u64;
+    let mut fx = build_stake_round_fixture(2, 1, stake_fee);
+    // The fixture sets intents[0].fee == stake_fee, so the plain builder's
+    // encoded fee already matches — this must succeed.
+    let tx = commit_intent_tx(&fx, 0, 0);
+    fx.svm
+        .send_transaction(tx)
+        .expect("fee == pool.stake_fee must be accepted");
 }

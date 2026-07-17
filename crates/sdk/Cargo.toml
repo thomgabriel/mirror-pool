@@ -27,3 +27,7 @@ serde_json = "1"
 # `build_execute_round_ix`) against a real on-chain program, not hand-built
 # instructions (that's `pool-program/tests/execute_round.rs`'s job).
 litesvm = "=0.6.1"
+# Native stake accounts are bincode-encoded (not Borsh) — the stake e2e
+# deserializes `StakeStateV2` directly to assert the real on-chain delegation
+# (mirrors `programs/pool-program/tests/stake_round.rs`).
+bincode = "1"
