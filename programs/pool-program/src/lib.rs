@@ -683,4 +683,6 @@ pub enum PoolError {
     StakeDenominationTooLow,
     #[msg("account does not match the pool's configured stake action")]
     StakeAccountInvalid,
+    #[msg("intent cannot be cancelled until its commit timeout has elapsed")]
+    CancelTooEarly,
 }
