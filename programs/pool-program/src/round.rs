@@ -40,8 +40,9 @@ pub struct Intent {
     pub relayer: Pubkey,
     pub fee: u64,
     pub action: ActionKind,
+    pub committed_slot: u64,
 }
 
 impl Intent {
-    pub const SPACE: usize = 8 + 32 + 8 + 32 + 32 + 8 + 1;
+    pub const SPACE: usize = 8 + 32 + 8 + 32 + 32 + 8 + 1 + 8;
 }

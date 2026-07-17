@@ -341,6 +341,7 @@ fn execute_round_rejects_intent_from_another_pool() {
         relayer: other_relayer,
         fee: FEE,
         action: ActionKind::Withdraw,
+        committed_slot: 0,
     };
     let mut data = Vec::new();
     foreign.try_serialize(&mut data).unwrap(); // writes discriminator + fields
