@@ -126,7 +126,7 @@ pub fn build_round_fixture(k_floor: u16, n: usize) -> RoundFixture {
     data.extend_from_slice(&k_floor.to_le_bytes());
     data.push(0u8);
     data.extend_from_slice(&Pubkey::default().to_bytes());
-    data.extend_from_slice(&0u64.to_le_bytes());
+    data.extend_from_slice(&FEE.to_le_bytes());
     send(
         &mut svm,
         &payer,
@@ -268,7 +268,7 @@ pub fn build_round_fixture_signer_recipients(
     data.extend_from_slice(&k_floor.to_le_bytes());
     data.push(0u8);
     data.extend_from_slice(&Pubkey::default().to_bytes());
-    data.extend_from_slice(&0u64.to_le_bytes());
+    data.extend_from_slice(&FEE.to_le_bytes());
     send(
         &mut svm,
         &payer,

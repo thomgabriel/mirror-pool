@@ -531,14 +531,14 @@ fn execute_round_stake_rejects_wrong_fee() {
             msg,
             fx.svm.latest_blockhash(),
         ))
-        .expect_err("an intent with fee != pool.stake_fee must be rejected");
+        .expect_err("an intent with fee != pool.fee must be rejected");
     assert!(
         outcome
             .meta
             .logs
             .iter()
-            .any(|l| l.contains("WrongActionConfig")),
-        "expected WrongActionConfig; logs: {:?}",
+            .any(|l| l.contains("FeeNotUniform")),
+        "expected FeeNotUniform; logs: {:?}",
         outcome.meta.logs
     );
 }

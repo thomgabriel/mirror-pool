@@ -176,14 +176,14 @@ fn initialize_pool_ix(
     k_floor: u16,
     action_kind: u8,
     validator: Pubkey,
-    stake_fee: u64,
+    fee: u64,
 ) -> Instruction {
     let mut d = disc("initialize_pool").to_vec();
     d.extend_from_slice(&denomination.to_le_bytes());
     d.extend_from_slice(&k_floor.to_le_bytes());
     d.push(action_kind);
     d.extend_from_slice(&validator.to_bytes());
-    d.extend_from_slice(&stake_fee.to_le_bytes());
+    d.extend_from_slice(&fee.to_le_bytes());
     Instruction {
         program_id: program_id(),
         accounts: vec![
@@ -249,13 +249,9 @@ fn initialize_stake_pool_stores_config() {
         "validator stored"
     );
 
-    let stake_fee_offset = 8 + core::mem::offset_of!(Pool, stake_fee);
-    let stored_stake_fee = u64::from_le_bytes(
-        data[stake_fee_offset..stake_fee_offset + 8]
-            .try_into()
-            .unwrap(),
-    );
-    assert_eq!(stored_stake_fee, stake_fee, "stake_fee stored");
+    let fee_offset = 8 + core::mem::offset_of!(Pool, fee);
+    let stored_fee = u64::from_le_bytes(data[fee_offset..fee_offset + 8].try_into().unwrap());
+    assert_eq!(stored_fee, stake_fee, "fee stored");
 }
 
 #[test]

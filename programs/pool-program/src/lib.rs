@@ -27,25 +27,25 @@ pub mod pool_program {
         k_floor: u16,
         action_kind: u8,
         validator: Pubkey,
-        stake_fee: u64,
+        fee: u64,
     ) -> Result<()> {
         require!(
             k_floor >= crate::round::MIN_K_FLOOR,
             PoolError::KFloorTooLow
         );
-        // Validate the action config. Withdraw pools carry no stake params; stake
-        // pools must name a validator and clear the delegation floor.
+        // Validate the action config. Withdraw pools carry no validator; the pool-wide fee must fit the denomination.
         match action_kind {
-            0 => require!(
-                validator == Pubkey::default() && stake_fee == 0,
-                PoolError::WrongActionConfig
-            ),
+            0 => {
+                // Withdraw pools carry no validator; the pool-wide fee must fit the denomination.
+                require!(validator == Pubkey::default(), PoolError::WrongActionConfig);
+                require!(fee <= denomination, PoolError::FeeExceedsDenomination);
+            }
             1 => {
                 require!(validator != Pubkey::default(), PoolError::WrongActionConfig);
                 let stake_rent =
                     Rent::get()?.minimum_balance(crate::invariants::STAKE_ACCOUNT_SIZE);
                 // Fails closed if denomination can't cover fee + rent + min delegation.
-                crate::invariants::stake_split(denomination, stake_fee, stake_rent)?;
+                crate::invariants::stake_split(denomination, fee, stake_rent)?;
             }
             _ => return err!(PoolError::WrongActionConfig),
         }
@@ -77,7 +77,7 @@ pub mod pool_program {
             pool.current_round_id = 0;
             pool.action_kind = action_kind;
             pool.validator = validator;
-            pool.stake_fee = stake_fee;
+            pool.fee = fee;
             pool.bump = ctx.bumps.pool;
             pool.vault_bump = ctx.bumps.vault;
             pool.filled_subtrees = z; // empty tree: filled subtrees == zeros
@@ -146,11 +146,9 @@ pub mod pool_program {
                 crate::roots::is_known(&pool.roots, &root),
                 PoolError::UnknownRoot
             );
-            require!(fee <= pool.denomination, PoolError::FeeExceedsDenomination);
-            // Stake pools require a uniform, pool-fixed fee (privacy + liveness — see note).
-            if pool.action_kind == 1 {
-                require!(fee == pool.stake_fee, PoolError::WrongActionConfig);
-            }
+            // Uniform pool-wide fee for BOTH action kinds: a variable fee is a payout-amount
+            // fingerprint (settlement side), and fee=0 on withdraw is free self-fill.
+            require!(fee == pool.fee, PoolError::FeeNotUniform);
             pool.action_kind
         };
         require!(
@@ -260,15 +258,7 @@ pub mod pool_program {
         ctx: Context<'_, '_, 'info, 'info, ExecuteRound<'info>>,
         round_id: u64,
     ) -> Result<()> {
-        let (
-            denomination,
-            vault_bump,
-            k_floor,
-            current_round_id,
-            action_kind,
-            validator,
-            stake_fee,
-        ) = {
+        let (denomination, vault_bump, k_floor, current_round_id, action_kind, validator, fee) = {
             let pool = ctx.accounts.pool.load()?;
             (
                 pool.denomination,
@@ -277,7 +267,7 @@ pub mod pool_program {
                 pool.current_round_id,
                 pool.action_kind,
                 pool.validator,
-                pool.stake_fee,
+                pool.fee,
             )
         };
         // Re-execution and stale/future round_id are impossible by construction —
@@ -339,6 +329,12 @@ pub mod pool_program {
                         PoolError::IntentAccountMismatch
                     );
 
+                    // Defense-in-depth: fee was fixed at commit (== pool.fee), so payouts are
+                    // uniform across the round. Re-assert so a stale/forged intent can't slip a
+                    // non-uniform amount into the batch — uniformity is enforced IDENTICALLY on
+                    // every PooledAction adapter, withdraw included.
+                    require!(intent.fee == fee, PoolError::FeeNotUniform);
+
                     let action = crate::action::WithdrawAction {
                         vault: ctx.accounts.vault.to_account_info(),
                         recipient: recipient_ai.clone(),
@@ -378,10 +374,10 @@ pub mod pool_program {
                     require!(intent.round_id == round_id, PoolError::IntentInvalid);
                     require!(!seen.contains(intent_ai.key), PoolError::DuplicateIntent);
                     seen.push(*intent_ai.key);
-                    // Defense-in-depth: fee was fixed at commit (== pool.stake_fee), so
+                    // Defense-in-depth: fee was fixed at commit (== pool.fee), so
                     // the delegated amounts are uniform. Re-assert so a stale/forged
                     // intent can't slip a non-uniform amount into the batch.
-                    require!(intent.fee == stake_fee, PoolError::WrongActionConfig);
+                    require!(intent.fee == fee, PoolError::FeeNotUniform);
                     require_keys_eq!(
                         *relayer_ai.key,
                         intent.relayer,
@@ -685,7 +681,7 @@ pub enum PoolError {
     IntentAccountMismatch,
     #[msg("duplicate intent account in the batch")]
     DuplicateIntent,
-    #[msg("action_kind/validator/stake_fee configuration is invalid for this pool")]
+    #[msg("action_kind/validator/fee configuration is invalid for this pool")]
     WrongActionConfig,
     #[msg("stake pool denomination is too low to cover fee + rent + minimum delegation")]
     StakeDenominationTooLow,
@@ -693,4 +689,6 @@ pub enum PoolError {
     StakeAccountInvalid,
     #[msg("intent cannot be cancelled until its commit timeout has elapsed")]
     CancelTooEarly,
+    #[msg("intent fee does not equal the pool's uniform fee")]
+    FeeNotUniform,
 }

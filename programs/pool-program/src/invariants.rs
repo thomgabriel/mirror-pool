@@ -32,13 +32,13 @@ pub const STAKE_ACCOUNT_SIZE: usize = 200;
 pub const MIN_STAKE_DELEGATION: u64 = 1_000_000_000;
 
 /// Split a stake pool's `denomination` into `(delegated, fee)`. The stake account
-/// is funded with `denomination - stake_fee`; DelegateStake stakes its balance
-/// above the rent reserve, so `delegated = denomination - stake_fee - stake_rent`.
+/// is funded with `denomination - fee`; DelegateStake stakes its balance
+/// above the rent reserve, so `delegated = denomination - fee - stake_rent`.
 /// Fails closed if the fee+rent exceed the denomination or the delegated amount is
 /// below the network minimum.
-pub fn stake_split(denomination: u64, stake_fee: u64, stake_rent: u64) -> Result<(u64, u64)> {
+pub fn stake_split(denomination: u64, fee: u64, stake_rent: u64) -> Result<(u64, u64)> {
     let after_fee = denomination
-        .checked_sub(stake_fee)
+        .checked_sub(fee)
         .ok_or(error!(PoolError::FeeExceedsDenomination))?;
     let delegated = after_fee
         .checked_sub(stake_rent)
@@ -47,7 +47,7 @@ pub fn stake_split(denomination: u64, stake_fee: u64, stake_rent: u64) -> Result
         delegated >= MIN_STAKE_DELEGATION,
         PoolError::StakeDenominationTooLow
     );
-    Ok((delegated, stake_fee))
+    Ok((delegated, fee))
 }
 
 /// Slots a committed intent stays uncancelable, counted from its own commit.
