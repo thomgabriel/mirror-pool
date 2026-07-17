@@ -180,7 +180,7 @@ fn sdk_driven_round_trip_two_intents() {
         2,
         0,
         Pubkey::default(),
-        0,
+        FEE,
     );
     send(&mut svm, &payer, &[&payer], init);
 
