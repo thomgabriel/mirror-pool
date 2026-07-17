@@ -23,6 +23,14 @@ ignore = [
     "RUSTSEC-2026-0099", # webpki wildcard name constraints — via reqwest; no TLS is performed
     "RUSTSEC-2026-0104", # webpki CRL-parse panic — via reqwest; no TLS is performed
     "RUSTSEC-2025-0055", # ANSI-escape log poisoning — client-side logging; no untrusted input is logged to a terminal
+    # Distinct category from the six above (those are vulnerabilities): this is an
+    # UNMAINTAINED advisory (a maintenance flag, not a security defect). `bincode 1.x` is
+    # a DEV-dependency of `pool-program`/`sdk` used only in tests to deserialize native
+    # `StakeStateV2` — which the Solana runtime itself bincode-1.x-serializes, so `bincode 2.x`
+    # (a different, incompatible API) cannot read that format — and it is additionally pulled
+    # transitively by `solana-bincode`/the Solana SDK. It is unavoidable in the Solana ecosystem
+    # and has no upstream migration off 1.x. Re-audit if a maintained `StakeStateV2` decoder appears.
+    "RUSTSEC-2025-0141", # bincode 1.x unmaintained — dev-only StakeStateV2 decode + transitive via solana-bincode
 ]
 
 [licenses]
