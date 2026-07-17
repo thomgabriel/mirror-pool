@@ -34,12 +34,12 @@ Every task's requirements implicitly include this section. Copy exact values ver
 - `programs/pool-program/src/round.rs` — *modify.* `ActionKind` gains `Stake`.
 - `programs/pool-program/src/invariants.rs` — *modify.* Add `stake_split(denomination, stake_fee, stake_rent) -> Result<(u64, u64)>` (delegated, fee) + host tests; `MIN_STAKE_DELEGATION` const.
 - `programs/pool-program/src/action.rs` — *modify.* Add `StakeAction` (the 4-CPI stake effect).
-- `programs/pool-program/src/lib.rs` — *modify.* `initialize_pool` gains `action_kind`/`validator`/`stake_fee` (+ validity); `execute_round` dispatches per `pool.action_kind`; new error variants; `Pubkey`/stake imports.
-- `programs/pool-program/Cargo.toml` — *modify.* Add `solana-stake-interface = "1.2"`.
-- `crates/sdk/src/lib.rs` — *modify.* `build_initialize_pool_ix` gains the stake args; `build_execute_round_ix` assembles per-kind `remaining_accounts`; `stake_account_pda` helper.
+- `programs/pool-program/src/lib.rs` — *modify.* `initialize_pool` gains `action_kind`/`validator`/`stake_fee` (+ validity); `commit_intent` enforces `fee == pool.stake_fee` on stake pools (uniform-amount invariant); `execute_round` dispatches per `pool.action_kind`; new error variants; `Pubkey`/stake imports.
+- `programs/pool-program/Cargo.toml` — *modify.* Add `solana-stake-interface = { version = "1.2", features = ["bincode"] }` (the instruction builders are `#[cfg(feature = "bincode")]`).
+- `crates/sdk/src/lib.rs` — *modify.* `build_initialize_pool_ix` gains the stake args; `build_execute_round_ix` assembles per-kind `remaining_accounts`; `stake_account_pda(pool, intent_pda)` helper (seeds `["stake", pool, intent_pda]`).
 - Tests: `programs/pool-program/tests/stake_round.rs` — *new.* LiteSVM pooled-stake round (vote-account setup) + adversarial. `initialize_pool.rs` / `round_support.rs` — *modify* (new init args). `crates/sdk/tests/e2e.rs` — *modify* (a stake round trip). Existing withdraw/commit/execute/cancel suites — *keep green*.
 
-**Interface names (verbatim):** `Pool.action_kind: u8` (0=Withdraw, 1=Stake), `Pool.validator: Pubkey`, `Pool.stake_fee: u64`; `round::ActionKind::Stake`; `invariants::{MIN_STAKE_DELEGATION, stake_split}`; `action::StakeAction`; `initialize_pool(denomination: u64, k_floor: u16, action_kind: u8, validator: Pubkey, stake_fee: u64)`; stake `remaining_accounts` layout = `[intent, stake_account, relayer] × count` then the shared tail `[validator, stake_program, stake_config, clock, stake_history, rent]`; stake PDA seeds `["stake", pool, nullifier_hash]`.
+**Interface names (verbatim):** `Pool.action_kind: u8` (0=Withdraw, 1=Stake), `Pool.validator: Pubkey`, `Pool.stake_fee: u64`; `round::ActionKind::Stake`; `invariants::{MIN_STAKE_DELEGATION, stake_split}`; `action::StakeAction`; `initialize_pool(denomination: u64, k_floor: u16, action_kind: u8, validator: Pubkey, stake_fee: u64)`; stake `remaining_accounts` layout = `[intent, stake_account, relayer] × count` then the shared tail `[validator, stake_program, stake_config, clock, stake_history, rent]`; stake PDA seeds `["stake", pool, intent_pda]` (the intent PDA key).
 
 ---
 
@@ -47,18 +47,21 @@ Every task's requirements implicitly include this section. Copy exact values ver
 
 Give the `Pool` an action kind + stake params, add the `Stake` variant, validate stake-pool config at init (denomination clears the 1-SOL delegation floor), and sweep every `initialize_pool` caller. Withdraw pools are unaffected (they pass `action_kind = 0`).
 
-**Files:** Modify `state.rs`, `round.rs`, `invariants.rs`, `lib.rs`; sweep `crates/sdk/src/lib.rs`, `programs/pool-program/tests/{initialize_pool.rs,deposit.rs,round_support.rs}`, `crates/sdk/tests/e2e.rs`. Test: `invariants.rs` host tests + `initialize_pool.rs`.
+**Files:** Modify `state.rs`, `round.rs`, `invariants.rs`, `lib.rs` (`initialize_pool` **and** `commit_intent`); sweep `crates/sdk/src/lib.rs`, `programs/pool-program/tests/{initialize_pool.rs,deposit.rs,round_support.rs}`, `crates/sdk/tests/e2e.rs`. Test: `invariants.rs` host tests + `initialize_pool.rs` + a `commit_intent` fee-guard case.
 
 **Interfaces:**
-- Produces: `Pool.{action_kind, validator, stake_fee}`; `ActionKind::Stake`; `invariants::{MIN_STAKE_DELEGATION, stake_split, STAKE_ACCOUNT_SIZE}`; `initialize_pool(denomination, k_floor, action_kind, validator, stake_fee)`; error variants `WrongActionConfig`, `StakeDenominationTooLow`.
+- Produces: `Pool.{action_kind, validator, stake_fee}`; `ActionKind::Stake`; `invariants::{MIN_STAKE_DELEGATION, stake_split, STAKE_ACCOUNT_SIZE}`; `initialize_pool(denomination, k_floor, action_kind, validator, stake_fee)`; the `commit_intent` stake-fee guard (`fee == pool.stake_fee`); error variants `WrongActionConfig`, `StakeDenominationTooLow`, `StakeAccountInvalid`.
 
 - [ ] **Step 1: Host tests for the value split (write first, run, fail)**
 
 Add to `programs/pool-program/src/invariants.rs`:
 
 ```rust
-/// Stake account layout size (StakeStateV2) — used only for the rent-exempt
-/// minimum. Kept as a const so the split math is host-testable without a syscall.
+/// Stake account layout size (`StakeStateV2`) — used for the rent-exempt minimum
+/// and the `create_account`/`allocate` size. Kept as a plain const so this pure
+/// module stays syscall-free and host-testable; Task 2 adds a compile-time
+/// `assert!(STAKE_ACCOUNT_SIZE == StakeStateV2::size_of())` in `action.rs` (where
+/// the stake crate is imported) so the two can never drift.
 pub const STAKE_ACCOUNT_SIZE: usize = 200;
 
 /// The Stake program's minimum delegation (1 SOL on mainnet, verified via
@@ -212,14 +215,28 @@ In `programs/pool-program/src/lib.rs`, change the handler:
 ```
 (Keep the existing vault-funding, tree-init, and `Round(0)` bodies exactly; only the signature, the validity `match`, and the three `pool.*` field sets are added.)
 
-- [ ] **Step 6: Sweep every `initialize_pool` caller (add the 3 args)**
+- [ ] **Step 6: `commit_intent` — enforce the per-pool stake fee**
+
+In `programs/pool-program/src/lib.rs`, `commit_intent` currently enforces only `fee <= denomination`. On a **stake** pool the fee must be EXACTLY `pool.stake_fee`, so every intent in a round delegates the same amount (`denomination − stake_fee − stake_rent`). Non-uniform fees would (a) fingerprint each stake account by its delegation amount — collapsing the anonymity set (spec §4's non-uniform-batch threat) — and (b) let one participant set a fee high enough that `delegated < MIN_STAKE_DELEGATION`, reverting the whole round for everyone. Add, right after the existing `fee <= denomination` check (the loaded `pool` is already in scope):
+
+```rust
+    // Stake pools require a uniform, pool-fixed fee (privacy + liveness — see note).
+    if pool.action_kind == 1 {
+        require!(fee == pool.stake_fee, PoolError::WrongActionConfig);
+    }
+```
+(`fee` is the handler arg being written into the new `Intent`; `pool.action_kind`/`pool.stake_fee` come from the existing `pool.load()`. Withdraw pools — `action_kind == 0`, `stake_fee == 0` — are unaffected.)
+
+Add a negative test (in `programs/pool-program/tests/commit_intent.rs`, mirroring its existing fee-bound test): committing to a stake pool with `fee != pool.stake_fee` → `WrongActionConfig`; committing with `fee == pool.stake_fee` → succeeds. Write it in full using the stake-pool fixture.
+
+- [ ] **Step 7: Sweep every `initialize_pool` caller (add the 3 args)**
 
 Withdraw callers pass `action_kind = 0, validator = Pubkey::default(), stake_fee = 0`:
 - `crates/sdk/src/lib.rs::build_initialize_pool_ix` — add `action_kind: u8, validator: Pubkey, stake_fee: u64` params; append `action_kind` (1 byte) + `validator` (32) + `stake_fee.to_le_bytes()` (8) to the instruction data after `k_floor`. Update its unit test.
 - `programs/pool-program/tests/initialize_pool.rs`, `deposit.rs::setup_pool`, `round_support.rs` (both fixtures), `crates/sdk/tests/e2e.rs` — pass the withdraw defaults (`0`, default pubkey, `0`) after `k_floor` in the `initialize_pool` data / builder call.
 - Data layout after this task: `disc(8)‖denomination(8)‖k_floor(2)‖action_kind(1)‖validator(32)‖stake_fee(8)`.
 
-- [ ] **Step 7: Stake-pool init tests**
+- [ ] **Step 8: Stake-pool init tests**
 
 Append to `programs/pool-program/tests/initialize_pool.rs`:
 ```rust
@@ -244,12 +261,12 @@ fn initialize_withdraw_pool_rejects_stake_params() {
 ```
 Write these in full using the existing `initialize_pool.rs` helpers (hand-built ix + `Pool::try_deserialize` / `offset_of!`).
 
-- [ ] **Step 8: Build, run, lint, commit**
+- [ ] **Step 9: Build, run, lint, commit**
 
-Run: `anchor build` (or `cargo build-sbf --manifest-path programs/pool-program/Cargo.toml`), then `cargo test -p pool-program` and `cargo test -p sdk` — all green (existing suites updated for the new signature; new stake-config tests pass). `cargo fmt` + `cargo clippy --all-targets -- -D warnings` clean.
+Run: `anchor build` (or `cargo build-sbf --manifest-path programs/pool-program/Cargo.toml`), then `cargo test -p pool-program` and `cargo test -p sdk` — all green (existing suites updated for the new signature; new stake-config + commit_intent fee-guard tests pass). `cargo fmt` + `cargo clippy --all-targets -- -D warnings` clean.
 ```bash
-git add programs/pool-program/src crates/sdk/src/lib.rs programs/pool-program/tests crates/sdk/tests
-git commit -m "feat(pool-program): pool action_kind/validator/stake_fee + stake_split invariant + initialize_pool validity"
+git add programs/pool-program/src programs/pool-program/Cargo.toml crates/sdk/src/lib.rs programs/pool-program/tests crates/sdk/tests
+git commit -m "feat(pool-program): pool action_kind/validator/stake_fee + stake_split invariant + init/commit validity"
 ```
 
 ---
@@ -268,9 +285,9 @@ The heart of Plan 5: the `PooledAction` impl that delegates one intent's note to
 
 In `programs/pool-program/Cargo.toml` `[dependencies]`:
 ```toml
-solana-stake-interface = "1.2"
+solana-stake-interface = { version = "1.2", features = ["bincode"] }
 ```
-(Already resolved in the lockfile via `solana-program` 2.2 — this makes it a direct dep for the instruction builders + `StakeStateV2`.)
+The `bincode` feature is REQUIRED — every instruction builder (`initialize`/`delegate_stake`/`authorize`) is `#[cfg(feature = "bincode")]`. It happens to be on transitively today (via `solana-program`), but declare it explicitly so the direct dep can't silently lose it. (Already resolved in the lockfile via `solana-program` 2.2.)
 
 - [ ] **Step 2: Implement `StakeAction`**
 
@@ -282,19 +299,26 @@ use solana_stake_interface::{
     state::{Authorized, Lockup, StakeAuthorize, StakeStateV2},
 };
 
+// Pin the hand-written host-side const to the real on-chain layout size, so the
+// rent-exempt minimum and the allocation size can never silently disagree.
+const _: () = assert!(crate::invariants::STAKE_ACCOUNT_SIZE == StakeStateV2::size_of());
+
 /// Delegate a single intent's note to the pool's validator. Ordered so the VAULT
 /// acts unilaterally (the participant's key is never present at execute):
-///   1. CreateAccount    the stake PDA, funded with `denomination - fee`
-///   2. Initialize       staker = VAULT, withdrawer = intent.recipient
+///   1. Create the stake PDA (DoS-robust), funded with `denomination - fee`
+///   2. Initialize       staker = VAULT, withdrawer = recipient (a Pubkey — CPI data, not an account)
 ///   3. DelegateStake     vault signs as staker → validator
-///   4. Authorize(Staker) vault → intent.recipient (participant now holds both authorities)
+///   4. Authorize(Staker) vault → recipient (participant now holds both authorities)
 ///   5. fee → relayer
 /// `delegated = denomination - fee - stake_rent` is what actually stakes (balance
 /// above the rent reserve); `DelegateStake` enforces the network minimum.
+/// NOTE: `recipient` is a `Pubkey`, NOT an AccountInfo — the stake authority is
+/// instruction DATA to Initialize/Authorize, never a passed account, which is what
+/// keeps the per-intent account count at 3 (k≈17).
 pub struct StakeAction<'a, 'info> {
     pub vault: AccountInfo<'info>,
     pub stake_account: AccountInfo<'info>,
-    pub recipient: AccountInfo<'info>, // = the stake authority (data, not a signer here)
+    pub recipient: Pubkey, // the stake authority (CPI data, not an account)
     pub relayer: AccountInfo<'info>,
     pub validator: AccountInfo<'info>,
     pub stake_program: AccountInfo<'info>,
@@ -320,21 +344,44 @@ impl PooledAction for StakeAction<'_, '_> {
             .checked_sub(fee)
             .ok_or(error!(crate::PoolError::FeeExceedsDenomination))?;
 
-        // 1. Create the stake PDA (vault funds; PDA signs for itself).
-        invoke_signed(
-            &system_instruction::create_account(
-                self.vault.key,
-                self.stake_account.key,
-                to_stake,
-                StakeStateV2::size_of() as u64,
-                self.stake_program.key,
-            ),
-            &[self.vault.clone(), self.stake_account.clone(), self.system_program.clone()],
-            &[self.vault_seeds[0], self.stake_seeds[0]],
-        )?;
+        // 1. Create the stake PDA — DoS-ROBUST. The PDA seed (`nullifier_hash`) is
+        //    PUBLIC, so an attacker can pre-fund the address with dust; a raw
+        //    `create_account` then fails "already in use" and bricks every round.
+        //    Mirror Anchor's own `init` fallback: if already funded, top up + allocate
+        //    + assign (an attacker can only ADD lamports to a system account, never
+        //    allocate/assign our PDA).
+        let existing = self.stake_account.lamports();
+        let size = crate::invariants::STAKE_ACCOUNT_SIZE as u64;
+        if existing == 0 {
+            invoke_signed(
+                &system_instruction::create_account(
+                    self.vault.key, self.stake_account.key, to_stake, size, self.stake_program.key,
+                ),
+                &[self.vault.clone(), self.stake_account.clone(), self.system_program.clone()],
+                &[self.vault_seeds[0], self.stake_seeds[0]],
+            )?;
+        } else {
+            if to_stake > existing {
+                invoke_signed(
+                    &system_instruction::transfer(self.vault.key, self.stake_account.key, to_stake - existing),
+                    &[self.vault.clone(), self.stake_account.clone(), self.system_program.clone()],
+                    self.vault_seeds,
+                )?;
+            }
+            invoke_signed(
+                &system_instruction::allocate(self.stake_account.key, size),
+                &[self.stake_account.clone(), self.system_program.clone()],
+                &[self.stake_seeds[0]],
+            )?;
+            invoke_signed(
+                &system_instruction::assign(self.stake_account.key, self.stake_program.key),
+                &[self.stake_account.clone(), self.system_program.clone()],
+                &[self.stake_seeds[0]],
+            )?;
+        }
 
-        // 2. Initialize: staker = VAULT, withdrawer = participant.
-        let authorized = Authorized { staker: *self.vault.key, withdrawer: *self.recipient.key };
+        // 2. Initialize: staker = VAULT, withdrawer = participant (both are Pubkeys/data).
+        let authorized = Authorized { staker: *self.vault.key, withdrawer: self.recipient };
         invoke_signed(
             &stake_instruction::initialize(self.stake_account.key, &authorized, &Lockup::default()),
             &[self.stake_account.clone(), self.rent.clone()],
@@ -364,7 +411,7 @@ impl PooledAction for StakeAction<'_, '_> {
             &stake_instruction::authorize(
                 self.stake_account.key,
                 self.vault.key,
-                self.recipient.key,
+                &self.recipient,
                 StakeAuthorize::Staker,
                 None,
             ),
@@ -404,7 +451,7 @@ Make `execute_round` branch on `pool.action_kind`, parse the stake `remaining_ac
 
 **Interfaces:**
 - Consumes: `action::StakeAction`, `Pool.{action_kind, validator, stake_fee}`, `invariants::STAKE_ACCOUNT_SIZE`.
-- Produces: the stake dispatch arm; stake `remaining_accounts` layout `[intent, stake_account, relayer]×count` + shared `[validator, stake_program, stake_config, clock, stake_history, rent]`; stake PDA seeds `["stake", pool, nullifier_hash]`.
+- Produces: the stake dispatch arm; stake `remaining_accounts` layout `[intent, stake_account, relayer]×count` + shared `[validator, stake_program, stake_config, clock, stake_history, rent]`; stake PDA seeds `["stake", pool, intent_pda]` (the intent PDA key, itself `["intent", pool, nullifier_hash]` — no `Intent` struct change).
 
 - [ ] **Step 1: Write the failing pooled-stake test**
 
@@ -412,29 +459,48 @@ Create `programs/pool-program/tests/stake_round.rs`. Use a `round_support` helpe
 ```rust
 // after execute_round on a k=2 stake pool:
 for m in &fx.intents {
+    // stake PDA is seeded off the INTENT PDA key, not nullifier_hash directly.
+    let (intent_pda, _) = Pubkey::find_program_address(
+        &[b"intent", fx.pool.as_ref(), m.nullifier_hash.as_ref()], &program_id());
     let (stake_pda, _) = Pubkey::find_program_address(
-        &[b"stake", fx.pool.as_ref(), m.nullifier_hash.as_ref()], &program_id());
+        &[b"stake", fx.pool.as_ref(), intent_pda.as_ref()], &program_id());
     let acct = fx.svm.get_account(&stake_pda).unwrap();
     assert_eq!(acct.owner, solana_sdk::stake::program::ID, "stake account owned by Stake program");
-    // deserialize StakeStateV2: assert delegation.voter_pubkey == validator,
-    // and authorized.staker == authorized.withdrawer == m.recipient (post-Authorize).
+    // Native stake accounts are BINCODE-encoded, not borsh: deserialize with
+    // `bincode::deserialize::<StakeStateV2>(&acct.data)` (or solana_sdk::stake::state
+    // helpers). Assert delegation.voter_pubkey == validator, and
+    // authorized.staker == authorized.withdrawer == m.recipient (post-Authorize).
 }
 // vault debited exactly k * denomination (fee to relayer + rest into stake accounts).
 ```
-Plus adversarial tests (full code, mirroring `execute_round.rs`): sub-k → `KFloorNotMet`; a substituted authority (wrong `recipient` in the triple) → `IntentAccountMismatch`; a foreign-pool crafted `Intent` → `IntentInvalid`; a duplicated intent → `DuplicateIntent`; a **wrong stake-account PDA** (not `["stake", pool, nullifier_hash]`) → `StakeAccountInvalid`; re-execute → "already in use".
+Plus adversarial tests (full code, mirroring `execute_round.rs`). Note the recipient is CPI *data*, not a passed account, so there is no "authority account" to substitute — the real substitution surfaces are the relayer and the stake account:
+- sub-k → `KFloorNotMet`;
+- a **substituted relayer** (wrong key in the triple, ≠ `intent.relayer`) → `IntentAccountMismatch`;
+- a **wrong stake-account PDA** (not `["stake", pool, intent_pda]`) → `StakeAccountInvalid`;
+- a foreign-pool crafted `Intent` → `IntentInvalid`;
+- a duplicated intent → `DuplicateIntent`;
+- **a pre-funded (dusted) stake PDA still executes** (C2 robustness — send 1 lamport to the derived stake PDA before execute, assert the round still completes and the stake account ends up owned by the Stake program);
+- re-execute the same round → the `next_round` init-collision guard rejects it.
 
 Run: `cargo test -p pool-program --test stake_round`
 Expected: FAIL — the stake dispatch doesn't exist; execute_round still assumes withdraw's 3-account layout.
 
 - [ ] **Step 2: Implement the per-kind dispatch in `execute_round`**
 
-In `programs/pool-program/src/lib.rs`, replace the fixed `rem.len() == count * 3` block + the single withdraw loop with a branch on `pool.action_kind` (read the action_kind + validator + stake_fee into the initial tuple). Keep the existing withdraw arm exactly; add the stake arm:
+In `programs/pool-program/src/lib.rs`, replace the fixed `rem.len() == count * 3` block + the single withdraw loop with a branch on **`pool.action_kind`** (read `action_kind` + `validator` + `stake_fee` into the initial tuple). **Dispatch is by `pool.action_kind`, NOT `intent.action`** — a pool is single-kind, so the pool config alone selects the effect. Two consequences to get right:
+
+- **The withdraw arm no longer matches on `intent.action`.** Adding the `Stake` variant (Task 1) makes the existing inner `match intent.action { Withdraw => … }` at the current withdraw loop **non-exhaustive → won't compile.** Delete that inner match: in arm `0` call `WithdrawAction::execute` directly (the outer `pool.action_kind == 0` already established withdraw). Do NOT add a `Stake =>` arm to the withdraw loop — there must be no `intent.action` match left inside either arm.
+- **The stake arm does NOT gate on `intent.action == Stake`.** Binding comes from the pool config + the per-intent stake PDA (below), not a redundant field check.
 
 ```rust
         // (read action_kind, validator, stake_fee alongside the existing tuple)
         let rem = ctx.remaining_accounts;
         match action_kind {
-            0 => { /* WITHDRAW — the existing code verbatim: rem.len()==count*3, the loop */ }
+            0 => {
+                // WITHDRAW — the existing loop verbatim, EXCEPT: no inner
+                // `match intent.action`; call WithdrawAction::execute directly.
+                // rem.len() == count * 3.
+            }
             1 => {
                 // Stake: [intent, stake_account, relayer] × count, then the shared tail.
                 const TAIL: usize = 6; // validator, stake_program, stake_config, clock, stake_history, rent
@@ -460,26 +526,28 @@ In `programs/pool-program/src/lib.rs`, replace the fixed `rem.len() == count * 3
                     require!(intent.round_id == round_id, PoolError::IntentInvalid);
                     require!(!seen.contains(intent_ai.key), PoolError::DuplicateIntent);
                     seen.push(*intent_ai.key);
-                    require!(
-                        intent.action == crate::round::ActionKind::Stake,
-                        PoolError::IntentInvalid
-                    );
-                    // The stake account must be the intent's canonical PDA.
-                    let nh = /* nullifier_hash for this intent: see note below */;
-                    let (expected_stake, _) = Pubkey::find_program_address(
-                        &[b"stake", pool_key.as_ref(), nh.as_ref()], &crate::ID);
-                    require_keys_eq!(*stake_ai.key, expected_stake, PoolError::StakeAccountInvalid);
+                    // Defense-in-depth: fee was fixed at commit (== pool.stake_fee), so the
+                    // delegated amounts are uniform. Re-assert so a stale/forged intent can't
+                    // slip a non-uniform amount into the batch.
+                    require!(intent.fee == stake_fee, PoolError::WrongActionConfig);
                     require_keys_eq!(*relayer_ai.key, intent.relayer, PoolError::IntentAccountMismatch);
 
-                    let stake_bump_arr = [/* stake bump */];
+                    // The stake account is the intent's canonical PDA, seeded off the INTENT
+                    // PDA key (itself ["intent", pool, nullifier_hash]) — no nullifier_hash
+                    // field on Intent, no struct change, no rent on withdraw intents.
+                    let (expected_stake, stake_bump) = Pubkey::find_program_address(
+                        &[b"stake", pool_key.as_ref(), intent_ai.key.as_ref()], &crate::ID);
+                    require_keys_eq!(*stake_ai.key, expected_stake, PoolError::StakeAccountInvalid);
+
+                    let stake_bump_arr = [stake_bump];
                     let stake_seed_refs: &[&[u8]] =
-                        &[b"stake", pool_key.as_ref(), nh.as_ref(), &stake_bump_arr];
+                        &[b"stake", pool_key.as_ref(), intent_ai.key.as_ref(), &stake_bump_arr];
                     let stake_seeds: &[&[&[u8]]] = &[stake_seed_refs];
 
                     let action = crate::action::StakeAction {
                         vault: ctx.accounts.vault.to_account_info(),
                         stake_account: stake_ai.clone(),
-                        recipient: /* AccountInfo carrying intent.recipient — see note */,
+                        recipient: intent.recipient,   // a Pubkey — CPI data, not an account
                         relayer: relayer_ai.clone(),
                         validator: validator_ai.clone(),
                         stake_program: stake_prog.clone(),
@@ -502,20 +570,14 @@ In `programs/pool-program/src/lib.rs`, replace the fixed `rem.len() == count * 3
         // (round.state = Executed; current_round_id += 1; next_round init — unchanged)
 ```
 
-**Two implementation notes the implementer must resolve (call them out in the report):**
-1. **`nullifier_hash` at execute.** The stake PDA seed needs the intent's `nullifier_hash`, which is NOT currently a field of `Intent`. Cleanest: **add `nullifier_hash: [u8; 32]` to `Intent`** (set in `commit_intent`, `Intent::SPACE += 32`) so `execute_round` can re-derive `["stake", pool, nullifier_hash]` and verify the passed stake account. (This also lets the withdraw path drop nothing — it just carries the field.) The stake bump: store it too, or re-derive with `find_program_address` (costs CU but fine at k≈17). Prefer storing `nullifier_hash` + re-deriving the bump via `find_program_address` for simplicity.
-2. **`recipient` as an AccountInfo for `StakeAction`.** `intent.recipient` is a `Pubkey` (the authority is CPI *data*, not a passed account). `StakeAction` only needs the recipient's key for `Authorize`/`Initialize` data — so pass an `AccountInfo` whose `.key` is `intent.recipient`. Since the participant's key is not a passed account, either (a) require the caller to pass the recipient as a read-only account in the triple (making it `[intent, stake_account, recipient, relayer]×count` = 4/intent, k≈13), OR (b) change `StakeAction` to take `recipient: Pubkey` instead of `AccountInfo` (cleaner — the recipient is never a CPI account, only data). **Choose (b):** make `StakeAction.recipient: Pubkey`; keep the triple at 3 accounts (`[intent, stake_account, relayer]`), preserving k≈17. Update Task 2's `StakeAction` accordingly (recipient is `Pubkey`, used in `Authorized`/`authorize` data).
+The stake PDA seed uses `intent_ai.key` (the intent PDA), which is client-derivable — the SDK's `stake_account_pda(pool, intent_pda)` (Task 4) seeds identically. `recipient` flows through as a `Pubkey` (Task 2's `StakeAction.recipient: Pubkey`, already folded), so the triple stays 3 accounts → k≈17.
 
-- [ ] **Step 3: Reconcile Task 2 (recipient: Pubkey) + Intent.nullifier_hash**
-
-Apply note (2): change `StakeAction.recipient` to `Pubkey` and use it directly in `Authorized { withdrawer: self.recipient }` and `authorize(..., &self.recipient, ...)`. Apply note (1): add `nullifier_hash: [u8;32]` to `Intent` (round.rs, `SPACE += 32`), set it in `commit_intent` (it already has `nullifier_hash` in scope), and derive the stake PDA + bump in `execute_round` via `find_program_address`.
-
-- [ ] **Step 4: Build, run, verify**
+- [ ] **Step 3: Build, run, verify**
 
 Run: `cargo build-sbf ...` then `cargo test -p pool-program --test stake_round`
-Expected: PASS (happy path + all adversarial). Then `cargo test -p pool-program` overall green (withdraw suite unchanged — the seam-regression proof). Print the stake-round CU.
+Expected: PASS (happy path + all adversarial). Then `cargo test -p pool-program` overall green (withdraw suite unchanged — the seam-regression proof). **Set the stake test's CU limit explicitly with `ComputeBudgetInstruction::set_compute_unit_limit(400_000)` (matching the existing tests) and print the measured stake-round CU** — 4 CPIs + a `find_program_address` per intent is heavier than withdraw's 1–2 transfers, so record the k=3 number and confirm it lands well under 400k. If it doesn't, the SDK's `build_execute_round_ix` must prepend a `ComputeBudgetInstruction` (note it in Task 4).
 
-- [ ] **Step 5: Lint + commit**
+- [ ] **Step 4: Lint + commit**
 ```bash
 cargo fmt && cargo clippy --all-targets -- -D warnings
 git add programs/pool-program/src programs/pool-program/tests/stake_round.rs programs/pool-program/tests/round_support.rs
@@ -531,18 +593,18 @@ Give clients the stake round, prove the full deposit→commit(k)→stake-execute
 **Files:** Modify `crates/sdk/src/lib.rs`. Modify `crates/sdk/tests/e2e.rs`. Test: `crates/sdk/tests/e2e.rs`, and a `cancel_intent`-on-stake case (in `stake_round.rs` or `cancel_intent.rs`).
 
 **Interfaces:**
-- Produces: `sdk::stake_account_pda(pool, nullifier_hash)`; `build_initialize_pool_ix` stake variant (Task 1 already added args — confirm); `build_execute_round_ix` per-kind `remaining_accounts` assembly (append stake PDAs + the shared tail for stake pools).
+- Produces: `sdk::stake_account_pda(pool, intent_pda)`; `build_initialize_pool_ix` stake variant (Task 1 already added args — confirm); `build_execute_round_ix` per-kind `remaining_accounts` assembly (append stake PDAs + the shared tail for stake pools).
 
 - [ ] **Step 1: SDK helpers + per-kind execute builder**
 
-In `crates/sdk/src/lib.rs`:
+In `crates/sdk/src/lib.rs` — the stake PDA is seeded off the **intent PDA key** (matching the on-chain `intent_ai.key` seed from Task 3), so it takes the already-derived `intent_pda`, not the raw `nullifier_hash`:
 ```rust
-pub fn stake_account_pda(pool: Pubkey, nullifier_hash: [u8; 32]) -> Pubkey {
+pub fn stake_account_pda(pool: Pubkey, intent_pda: Pubkey) -> Pubkey {
     Pubkey::find_program_address(
-        &[b"stake", pool.as_ref(), nullifier_hash.as_ref()], &pool_program::ID).0
+        &[b"stake", pool.as_ref(), intent_pda.as_ref()], &pool_program::ID).0
 }
 ```
-Extend `build_execute_round_ix` (or add `build_execute_stake_round_ix`) to assemble the stake layout: for each intent `[intent_pda, stake_account_pda, relayer]`, then append the shared tail `[validator, stake_program (solana_sdk::stake::program::ID), stake_config (stake::config::ID), clock (sysvar), stake_history (sysvar), rent (sysvar)]` — all read-only except the stake accounts. Keep the withdraw builder path unchanged.
+Extend `build_execute_round_ix` (or add `build_execute_stake_round_ix`) to assemble the stake layout: for each intent `[intent_pda, stake_account_pda(pool, intent_pda), relayer]`, then append the shared tail `[validator, stake_program (solana_sdk::stake::program::ID), stake_config (stake::config::ID), clock (sysvar), stake_history (sysvar), rent (sysvar)]` — all read-only except the stake accounts. **If Task 3's measured CU showed the stake round approaching 400k, prepend a `ComputeBudgetInstruction::set_compute_unit_limit(...)` to the returned instruction list** (state the measured number driving the choice). Keep the withdraw builder path unchanged.
 
 - [ ] **Step 2: SDK e2e — a pooled-stake round trip (write, fail, implement, pass)**
 
@@ -572,12 +634,12 @@ git commit -m "feat(sdk): pooled-stake builders + e2e; cancel_intent works on st
 - §2.1 the **4-CPI order** (Create → Initialize[staker=vault, withdrawer=recipient] → DelegateStake[vault signs] → Authorize[staker→recipient]) → Task 2 `StakeAction`, exactly (the reviewed signer fix).
 - §2.2 account budget (3/intent + 6 shared → k≈17) → Task 3's stake layout `count*3 + 6`.
 - §6 value split `delegated = denomination − stake_fee − stake_rent` + the `≥ MIN_STAKE_DELEGATION` validity floor → `invariants::stake_split` (Task 1) + `initialize_pool` validity + `DelegateStake` at execute.
-- §6 fixed per-pool fee (byte-amount uniformity) → `Pool.stake_fee` + init validity; `commit_intent`'s `fee == pool.stake_fee` on stake pools (add this `require!` in Task 1's init/commit — note: `commit_intent` currently allows any `fee ≤ denomination`; for a **stake** pool it must equal `pool.stake_fee`; add that guard and a test).
-- §4 threat deltas (authority redirection, non-uniform batch, sub-k, whale-self-fill residual) → Task 3 adversarial tests + the honest residual (documented, not tested — it's a stated tradeoff).
+- §6 fixed per-pool fee (amount uniformity) → `Pool.stake_fee` + init validity; **`commit_intent`'s `fee == pool.stake_fee` guard on stake pools → Task 1 Step 6** (+ a negative test), with a defense-in-depth re-check in the execute stake arm (Task 3).
+- §4 threat deltas (authority redirection, non-uniform batch, sub-k, whale-self-fill residual) → Task 3 adversarial tests + the honest residual (documented, not tested — it's a stated tradeoff). The dust-griefing DoS on the stake PDA (public seed) is closed by the robust create-or-adopt path in `StakeAction` (Task 2) and proven by the pre-funded-PDA test (Task 3).
 - §5 testing (happy + adversarial + cancel + **withdraw seam regression**) → Tasks 3-4.
 
-**2. Placeholder scan:** Task 3 Step 2 intentionally leaves two `/* ... */` decisions (the `nullifier_hash` source + `recipient: Pubkey` vs account) and resolves them explicitly in Step 3 with the chosen answer (add `Intent.nullifier_hash`; make `StakeAction.recipient: Pubkey`) — these are directed decisions, not open placeholders. Task 1 Step 7 and Task 3 Step 1 describe test bodies in prose with the exact asserts; the implementer writes them in full using the named existing helpers.
+**2. Placeholder scan:** No open placeholders remain — the review folded the `recipient: Pubkey` decision into Task 2's `StakeAction` and the stake-PDA-seed decision (`["stake", pool, intent_pda]`, no `Intent` change) into Task 3's dispatch, so no task is knowingly-wrong in isolation. Task 1 Steps 6/8 and Task 3 Step 1 describe test bodies in prose with the exact asserts; the implementer writes them in full using the named existing helpers.
 
-**3. Type consistency:** `ActionKind::Stake`, `Pool.{action_kind:u8, validator:Pubkey, stake_fee:u64}`, `StakeAction` (recipient: `Pubkey` per the Step-3 reconciliation), `stake_split(u64,u64,u64)->Result<(u64,u64)>`, the stake `remaining_accounts` shape (`[intent, stake_account, relayer]×count` + 6-tail), and the stake PDA seeds `["stake", pool, nullifier_hash]` are used identically across `round.rs`, `action.rs`, `lib.rs`, the tests, and the SDK. `Intent` gains `nullifier_hash` (Task 3 Step 3) — every `Intent::SPACE` / constructor site updated in the same step.
+**3. Type consistency:** `ActionKind::Stake`, `Pool.{action_kind:u8, validator:Pubkey, stake_fee:u64}`, `StakeAction` (recipient: `Pubkey`), `stake_split(u64,u64,u64)->Result<(u64,u64)>`, the stake `remaining_accounts` shape (`[intent, stake_account, relayer]×count` + 6-tail), and the stake PDA seeds `["stake", pool, intent_pda]` are used identically across `round.rs`, `action.rs`, `lib.rs`, the tests, and the SDK. `Intent` is **unchanged** — the stake PDA binds via the existing intent PDA key, so no `SPACE`/constructor edits and no rent cost on withdraw intents.
 
 **Deferred (out of scope, honestly):** pooled un-stake / reward claim (incentive module), pooled swap (account envelope + chunked executor), multi-action pools, incentive/bonding (the whale-self-fill residual is stated), the effective-k harness (Plan 6), and the ~1.003-SOL stake-pool crowd-depth floor (a production concern, fine for the bounty demo — recorded in the spec §6).
