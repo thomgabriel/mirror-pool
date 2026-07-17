@@ -104,7 +104,7 @@ Expected: PASS (2 tests).
 
 - [ ] **Step 6: Lint + commit**
 
-Run: `cargo fmt` + `cargo clippy -p pool-program --lib -- -D warnings` (clean).
+Run: `cargo fmt` + `cargo clippy --all-targets -- -D warnings` (clean — the Global Constraint scope).
 ```bash
 git add programs/pool-program/src/invariants.rs programs/pool-program/src/lib.rs
 git commit -m "feat(pool-program): cancel_unlock_slot pure fn + TIMEOUT_SLOTS + CancelTooEarly"
