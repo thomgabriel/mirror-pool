@@ -132,16 +132,26 @@ The gate uses the Clock sysvar's **slot** number.
 - `Intent` gains `committed_slot: u64` (`round.rs`; `Intent::SPACE` 121 → 129),
   set in `commit_intent` from `Clock::get()?.slot`.
 - `commit_intent`: after recording the intent, set `intent.committed_slot`.
-- `cancel_intent`: add the gate before the refund. Compute the earliest
-  cancelable slot fail-closed and require the current slot has reached it:
+- `invariants.rs` gains a **pure, host-tested** `cancel_unlock_slot` alongside
+  `TIMEOUT_SLOTS` — the earliest cancelable slot, computed fail-closed. Putting it
+  here (not inline in the handler) matches the `meets_k_floor` / `stake_split`
+  precedent and makes the overflow branch **coverage-visible** to host unit tests,
+  since SBF in-VM lines are not measured by `cargo-llvm-cov`:
   ```rust
-  let unlock = intent.committed_slot
-      .checked_add(crate::invariants::TIMEOUT_SLOTS)
-      .ok_or(error!(PoolError::CancelTooEarly))?; // overflow → fail closed (cannot cancel)
+  pub const TIMEOUT_SLOTS: u64 = 9_000; // ~1h at 400ms/slot — see the const caveat above
+  pub fn cancel_unlock_slot(committed_slot: u64) -> Result<u64> {
+      committed_slot
+          .checked_add(TIMEOUT_SLOTS)
+          .ok_or(error!(crate::PoolError::CancelTooEarly)) // overflow → fail closed (cannot cancel)
+  }
+  ```
+- `cancel_intent`: add the gate before the refund, delegating the arithmetic to
+  the pure fn. The intent account is already in the `CancelIntent` context (bound
+  `has_one = recipient`), so `committed_slot` is readable before the `close`:
+  ```rust
+  let unlock = crate::invariants::cancel_unlock_slot(intent.committed_slot)?;
   require!(Clock::get()?.slot >= unlock, PoolError::CancelTooEarly);
   ```
-  The intent account is already in the `CancelIntent` context (bound
-  `has_one = recipient`), so `committed_slot` is readable before the `close`.
 - `PoolError` gains `CancelTooEarly`, **appended** after the current last variant
   (`StakeAccountInvalid`) — error codes stay append-only (6001/6002 in
   `deposit.rs` unshifted).
@@ -153,6 +163,10 @@ proof path. The SDK `build_cancel_intent_ix` is unchanged (the gate is enforced
 on-chain; the client just needs to submit after the timeout).
 
 ## Testing
+
+A **host unit test** covers `cancel_unlock_slot` directly (the branch SBF
+coverage can't see): `cancel_unlock_slot(0) == Ok(TIMEOUT_SLOTS)` and
+`cancel_unlock_slot(u64::MAX)` is `Err` (overflow fails closed).
 
 LiteSVM lets tests set the Clock sysvar directly, so both gate directions are
 cheap and deterministic — tests **warp**, they do not wait:
