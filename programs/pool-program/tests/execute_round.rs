@@ -496,3 +496,87 @@ fn commit_to_executed_round_rejects() {
         outcome.meta.logs
     );
 }
+
+#[test]
+fn execute_round_withdraw_rejects_wrong_fee() {
+    use anchor_lang::AccountSerialize;
+    use pool_program::round::{ActionKind, Intent};
+    use solana_sdk::account::Account;
+
+    let mut fx = build_round_fixture(2, 2);
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 0, 0))
+        .unwrap();
+    fx.svm.expire_blockhash();
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 1, 0))
+        .unwrap();
+
+    // A program-owned Intent (correct discriminator), correctly bound to THIS
+    // pool/round, but with `fee != pool.fee`.
+    let wrong_recipient = Pubkey::new_unique();
+    let wrong_relayer = Pubkey::new_unique();
+    let wrong_fee = Intent {
+        pool: fx.pool,
+        round_id: 0,
+        recipient: wrong_recipient,
+        relayer: wrong_relayer,
+        fee: FEE + 1, // NOT pool.fee
+        action: ActionKind::Withdraw,
+        committed_slot: 0,
+    };
+    let mut data = Vec::new();
+    wrong_fee.try_serialize(&mut data).unwrap();
+    let wrong_fee_addr = Pubkey::new_unique();
+    fx.svm
+        .set_account(
+            wrong_fee_addr,
+            Account {
+                lamports: 10_000_000,
+                data,
+                owner: program_id(),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+
+    let cranker = Keypair::new();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
+    // Replace intent 1 with the wrong-fee intent; recipient/relayer match the
+    // forged intent's values, so the fee check (not account mismatch) fires.
+    let triples: Vec<(Pubkey, Pubkey, Pubkey)> = vec![
+        (
+            fx.intents[0].intent_pda,
+            fx.intents[0].recipient,
+            fx.intents[0].relayer,
+        ),
+        (wrong_fee_addr, wrong_recipient, wrong_relayer),
+    ];
+    fx.svm.expire_blockhash();
+    let ix = execute_round_ix(&fx, 0, cranker.pubkey(), &triples);
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            ix,
+        ],
+        Some(&cranker.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(
+            &[&cranker],
+            msg,
+            fx.svm.latest_blockhash(),
+        ))
+        .expect_err("an intent with fee != pool.fee must be rejected");
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|l| l.contains("FeeNotUniform")),
+        "expected FeeNotUniform; logs: {:?}",
+        outcome.meta.logs
+    );
+}

@@ -176,14 +176,14 @@ fn initialize_pool_ix(
     k_floor: u16,
     action_kind: u8,
     validator: Pubkey,
-    stake_fee: u64,
+    fee: u64,
 ) -> Instruction {
     let mut d = disc("initialize_pool").to_vec();
     d.extend_from_slice(&denomination.to_le_bytes());
     d.extend_from_slice(&k_floor.to_le_bytes());
     d.push(action_kind);
     d.extend_from_slice(&validator.to_bytes());
-    d.extend_from_slice(&stake_fee.to_le_bytes());
+    d.extend_from_slice(&fee.to_le_bytes());
     Instruction {
         program_id: program_id(),
         accounts: vec![
@@ -249,13 +249,9 @@ fn initialize_stake_pool_stores_config() {
         "validator stored"
     );
 
-    let stake_fee_offset = 8 + core::mem::offset_of!(Pool, stake_fee);
-    let stored_stake_fee = u64::from_le_bytes(
-        data[stake_fee_offset..stake_fee_offset + 8]
-            .try_into()
-            .unwrap(),
-    );
-    assert_eq!(stored_stake_fee, stake_fee, "stake_fee stored");
+    let fee_offset = 8 + core::mem::offset_of!(Pool, fee);
+    let stored_fee = u64::from_le_bytes(data[fee_offset..fee_offset + 8].try_into().unwrap());
+    assert_eq!(stored_fee, stake_fee, "fee stored");
 }
 
 #[test]
@@ -345,6 +341,103 @@ fn initialize_withdraw_pool_rejects_stake_params() {
             .iter()
             .any(|l| l.contains("WrongActionConfig")),
         "expected WrongActionConfig; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+#[test]
+fn initialize_withdraw_pool_stores_fee() {
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 10_000_000_000).unwrap();
+    svm.add_program_from_file(program_id(), so_path()).unwrap();
+
+    let mint = Pubkey::new_unique();
+    let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
+    let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+
+    let denomination = 1_000_000u64;
+    let withdraw_fee = 1_000u64;
+
+    let ix = initialize_pool_ix(
+        pool,
+        vault,
+        round,
+        mint,
+        payer.pubkey(),
+        denomination,
+        2,
+        0,
+        Pubkey::default(),
+        withdraw_fee,
+    );
+    let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
+    svm.send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
+        .expect("valid withdraw-pool config must succeed");
+
+    let acct = svm.get_account(&pool).unwrap();
+    let data = acct.data();
+
+    let action_kind_offset = 8 + core::mem::offset_of!(Pool, action_kind);
+    assert_eq!(data[action_kind_offset], 0, "action_kind == Withdraw");
+
+    let validator_offset = 8 + core::mem::offset_of!(Pool, validator);
+    assert_eq!(
+        &data[validator_offset..validator_offset + 32],
+        Pubkey::default().as_ref(),
+        "validator is default for withdraw pool"
+    );
+
+    let fee_offset = 8 + core::mem::offset_of!(Pool, fee);
+    let stored_fee = u64::from_le_bytes(data[fee_offset..fee_offset + 8].try_into().unwrap());
+    assert_eq!(stored_fee, withdraw_fee, "fee stored");
+}
+
+#[test]
+fn initialize_withdraw_pool_rejects_fee_over_denomination() {
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 10_000_000_000).unwrap();
+    svm.add_program_from_file(program_id(), so_path()).unwrap();
+
+    let mint = Pubkey::new_unique();
+    let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
+    let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+
+    let denomination = 1_000_000u64;
+    let withdraw_fee = denomination + 1;
+
+    let ix = initialize_pool_ix(
+        pool,
+        vault,
+        round,
+        mint,
+        payer.pubkey(),
+        denomination,
+        2,
+        0,
+        Pubkey::default(),
+        withdraw_fee,
+    );
+    let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
+    let outcome = svm
+        .send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
+        .expect_err("withdraw pool with fee > denomination must be rejected");
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|l| l.contains("FeeExceedsDenomination")),
+        "expected FeeExceedsDenomination; logs: {:?}",
         outcome.meta.logs
     );
 }

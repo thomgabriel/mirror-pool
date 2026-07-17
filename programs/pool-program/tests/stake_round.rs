@@ -454,7 +454,7 @@ fn execute_round_stake_rejects_intent_from_another_pool() {
     );
 }
 
-// `commit_intent` enforces `fee == pool.stake_fee` at commit time, so a
+// `commit_intent` enforces `fee == pool.fee` at commit time, so a
 // normal flow can never produce a mismatched fee — this crafts an `Intent`
 // account directly (bypassing `commit_intent`) to exercise `execute_round`'s
 // defense-in-depth re-check, the same way `..._rejects_intent_from_another_pool`
@@ -476,13 +476,13 @@ fn execute_round_stake_rejects_wrong_fee() {
         .unwrap();
 
     // A program-owned Intent (correct discriminator), correctly bound to THIS
-    // pool/round, but with `fee != pool.stake_fee`.
+    // pool/round, but with `fee != pool.fee`.
     let wrong_fee = Intent {
         pool: fx.pool,
         round_id: 0,
         recipient: Pubkey::new_unique(),
         relayer: Pubkey::new_unique(),
-        fee: stake_fee + 1, // NOT pool.stake_fee
+        fee: stake_fee + 1, // NOT pool.fee
         action: ActionKind::Stake,
         committed_slot: 0,
     };
@@ -531,14 +531,14 @@ fn execute_round_stake_rejects_wrong_fee() {
             msg,
             fx.svm.latest_blockhash(),
         ))
-        .expect_err("an intent with fee != pool.stake_fee must be rejected");
+        .expect_err("an intent with fee != pool.fee must be rejected");
     assert!(
         outcome
             .meta
             .logs
             .iter()
-            .any(|l| l.contains("WrongActionConfig")),
-        "expected WrongActionConfig; logs: {:?}",
+            .any(|l| l.contains("FeeNotUniform")),
+        "expected FeeNotUniform; logs: {:?}",
         outcome.meta.logs
     );
 }

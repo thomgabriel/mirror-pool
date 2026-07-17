@@ -144,14 +144,14 @@ pub fn build_initialize_pool_ix(
     k_floor: u16,
     action_kind: u8,
     validator: Pubkey,
-    stake_fee: u64,
+    fee: u64,
 ) -> Instruction {
     let mut data = discriminator("initialize_pool").to_vec();
     data.extend_from_slice(&denomination.to_le_bytes());
     data.extend_from_slice(&k_floor.to_le_bytes());
     data.push(action_kind);
     data.extend_from_slice(&validator.to_bytes());
-    data.extend_from_slice(&stake_fee.to_le_bytes());
+    data.extend_from_slice(&fee.to_le_bytes());
     Instruction {
         program_id: pool_program::ID,
         accounts: vec![
@@ -628,7 +628,7 @@ mod tests {
         assert_eq!(&ix.data[16..18], &k_floor.to_le_bytes());
         assert_eq!(ix.data[18], 0, "action_kind");
         assert_eq!(&ix.data[19..51], &Pubkey::default().to_bytes(), "validator");
-        assert_eq!(&ix.data[51..59], &0u64.to_le_bytes(), "stake_fee");
+        assert_eq!(&ix.data[51..59], &0u64.to_le_bytes(), "fee");
         assert_eq!(ix.accounts.len(), 6);
         assert_eq!(ix.accounts[4].pubkey, payer);
         assert!(ix.accounts[4].is_signer);

@@ -127,9 +127,10 @@ fn commit_intent_rejects_unknown_root() {
     );
 }
 
-// I4: `fee > denomination` is a reachable value guard on the commit path (it
-// fires BEFORE proof verification), and must fail closed. Reuse intent 0's real
-// proof but set an out-of-range fee in the instruction data.
+// I4: Fee uniformity gate fires BEFORE proof verification on any mismatched fee.
+// With task-1 uniformity, `fee > denomination` is caught by `fee != pool.fee`
+// (since pool.fee was already ≤ denomination at init). This test verifies
+// that any mismatch, even if out-of-range, is rejected at commit.
 #[test]
 fn commit_intent_rejects_fee_over_denomination() {
     let mut fx = build_round_fixture(2, 1);
@@ -181,17 +182,16 @@ fn commit_intent_rejects_fee_over_denomination() {
             .meta
             .logs
             .iter()
-            .any(|l| l.contains("FeeExceedsDenomination")),
-        "expected FeeExceedsDenomination; logs: {:?}",
+            .any(|l| l.contains("FeeNotUniform")),
+        "expected FeeNotUniform (uniformity check fires before proof verify); logs: {:?}",
         outcome.meta.logs
     );
 }
 
-// Plan 5 Task 1: a stake pool requires every intent's fee to exactly equal the
-// pool's configured `stake_fee` (uniform delegation amount — see lib.rs's
-// commit_intent doc note on the privacy/liveness rationale). Reuse intent 0's
-// real proof (the fee guard fires before proof verification) but set a
-// mismatched fee in the instruction data.
+// A stake pool requires every intent's fee to exactly equal the pool's
+// configured `fee` (uniform amount — see lib.rs's commit_intent payout-uniformity
+// note). Reuse intent 0's real proof (the fee guard fires before proof
+// verification) but set a mismatched fee in the instruction data.
 #[test]
 fn commit_intent_rejects_wrong_stake_fee() {
     let stake_fee = 5_000u64;
@@ -238,14 +238,14 @@ fn commit_intent_rejects_wrong_stake_fee() {
             msg,
             fx.svm.latest_blockhash(),
         ))
-        .expect_err("a stake-pool fee that doesn't match pool.stake_fee must fail closed");
+        .expect_err("a stake-pool fee that doesn't match pool.fee must fail closed");
     assert!(
         outcome
             .meta
             .logs
             .iter()
-            .any(|l| l.contains("WrongActionConfig")),
-        "expected WrongActionConfig; logs: {:?}",
+            .any(|l| l.contains("FeeNotUniform")),
+        "expected FeeNotUniform; logs: {:?}",
         outcome.meta.logs
     );
 }
@@ -259,5 +259,62 @@ fn commit_intent_accepts_matching_stake_fee() {
     let tx = commit_intent_tx(&fx, 0, 0);
     fx.svm
         .send_transaction(tx)
-        .expect("fee == pool.stake_fee must be accepted");
+        .expect("fee == pool.fee must be accepted");
+}
+
+#[test]
+fn commit_intent_rejects_wrong_withdraw_fee() {
+    let mut fx = build_round_fixture(2, 1);
+    let m = &fx.intents[0];
+    let (round0, _) = Pubkey::find_program_address(
+        &[b"round", fx.pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+    let bad_fee = round_support::FEE + 1;
+    let mut data = round_support::disc("commit_intent").to_vec();
+    data.extend_from_slice(&m.proof.a);
+    data.extend_from_slice(&m.proof.b);
+    data.extend_from_slice(&m.proof.c);
+    data.extend_from_slice(&m.root);
+    data.extend_from_slice(&m.nullifier_hash);
+    data.extend_from_slice(&bad_fee.to_le_bytes());
+    data.extend_from_slice(&0u64.to_le_bytes());
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(fx.pool, false),
+            AccountMeta::new(round0, false),
+            AccountMeta::new(m.intent_pda, false),
+            AccountMeta::new(m.nullifier_pda, false),
+            AccountMeta::new_readonly(m.recipient, false),
+            AccountMeta::new_readonly(m.relayer, false),
+            AccountMeta::new(fx.payer.pubkey(), true),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            ix,
+        ],
+        Some(&fx.payer.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(
+            &[&fx.payer],
+            msg,
+            fx.svm.latest_blockhash(),
+        ))
+        .expect_err("a withdraw-pool fee that doesn't match pool.fee must fail closed");
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|l| l.contains("FeeNotUniform")),
+        "expected FeeNotUniform; logs: {:?}",
+        outcome.meta.logs
+    );
 }
