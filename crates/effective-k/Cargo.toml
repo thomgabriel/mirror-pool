@@ -7,3 +7,6 @@ publish = false
 
 [dependencies]
 # none — pure host analysis, no solana/anchor deps.
+
+[dev-dependencies]
+proptest = "1"

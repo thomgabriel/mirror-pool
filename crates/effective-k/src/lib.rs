@@ -178,3 +178,89 @@ mod tests {
         assert!(!collapses_below(&r, 1.0)); // 1.0 < 1.0 is false
     }
 }
+
+#[cfg(test)]
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn f(n: u64) -> FunderId {
+        let mut b = [0u8; 32];
+        b[..8].copy_from_slice(&n.to_le_bytes());
+        FunderId(b)
+    }
+
+    // MANDATORY (fix-B-equivalent): a labeled operator/treasury funder owning `d` of `k`
+    // notes is ONE funder — k_∞ = k/d, identical to a whale of size d. Never exempt.
+    proptest! {
+        #[test]
+        fn treasury_is_the_whale(d in 1usize..=12, singletons in 0usize..=12) {
+            const TREASURY: u64 = 999; // just another clustered funder — a fixed label
+                                       // outside the singleton range `1..=singletons`.
+            let mut funders: Vec<FunderId> = vec![f(TREASURY); d];
+            funders.extend((1..=singletons as u64).map(f)); // distinct honest funders
+            let k = d + singletons;
+            let comp = RoundComposition::new(funders).unwrap();
+            let r = anonymity_report(&comp);
+            // The treasury holds the largest mass (d >= 1, singletons hold 1 each), so m = d
+            // whenever d >= 1 and no singleton batch exceeds it (singletons are size 1).
+            prop_assert!((r.effective_k - k as f64 / d as f64).abs() < 1e-9);
+            prop_assert_eq!(r.nominal_k, k as u32);
+        }
+    }
+
+    // A random funder assignment over k notes: label each of k notes with a funder drawn
+    // from `n_funders` distinct ids. Asserts the metric's invariants.
+    fn composition_strategy() -> impl Strategy<Value = Vec<FunderId>> {
+        (1usize..=40).prop_flat_map(|k| {
+            (1usize..=k).prop_flat_map(move |n_funders| {
+                proptest::collection::vec(0u64..n_funders as u64, k)
+                    .prop_map(|labels| labels.into_iter().map(f).collect::<Vec<_>>())
+            })
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn invariants(funders in composition_strategy()) {
+            let k = funders.len();
+            // m = the true dominant funder count, computed independently of the metric.
+            let mut counts = std::collections::HashMap::new();
+            for &x in &funders { *counts.entry(x).or_insert(0u32) += 1; }
+            let m = *counts.values().max().unwrap();
+
+            let comp = RoundComposition::new(funders).unwrap();
+            let r = anonymity_report(&comp);
+            let k_f = k as f64;
+
+            // exactness: k_∞ = k/m, Adv = (m-1)/k, max share = m/k.
+            prop_assert!((r.effective_k - k_f / m as f64).abs() < 1e-9);
+            prop_assert!((r.guessing_advantage - (m as f64 - 1.0) / k_f).abs() < 1e-9);
+            prop_assert!((r.max_funder_share - m as f64 / k_f).abs() < 1e-9);
+            // ranges.
+            prop_assert!(r.effective_k >= 1.0 - 1e-9 && r.effective_k <= k_f + 1e-9);
+            prop_assert!(r.guessing_advantage >= -1e-9 && r.guessing_advantage <= (k_f - 1.0) / k_f + 1e-9);
+            prop_assert!(r.max_funder_share >= 1.0 / k_f - 1e-9 && r.max_funder_share <= 1.0 + 1e-9);
+            // hierarchy: nominal_k ≥ shannon_k ≥ effective_k (Cachin 1997 Prop. 2.4).
+            prop_assert!(r.nominal_k as f64 >= r.shannon_effective_k - 1e-9);
+            prop_assert!(r.shannon_effective_k >= r.effective_k - 1e-9);
+        }
+    }
+
+    // Monotonicity: concentrating a note onto the dominant funder never RAISES effective_k.
+    proptest! {
+        #[test]
+        fn concentration_never_raises_effective_k(funders in composition_strategy()) {
+            let comp = RoundComposition::new(funders.clone()).unwrap();
+            let before = anonymity_report(&comp).effective_k;
+            // Relabel note 0 to match note with the current dominant funder → m increases or holds.
+            let mut counts = std::collections::HashMap::new();
+            for &x in &funders { *counts.entry(x).or_insert(0u32) += 1; }
+            let dominant = *counts.iter().max_by_key(|(_, &c)| c).unwrap().0;
+            let mut concentrated = funders.clone();
+            concentrated[0] = dominant;
+            let after = anonymity_report(&RoundComposition::new(concentrated).unwrap()).effective_k;
+            prop_assert!(after <= before + 1e-9);
+        }
+    }
+}
