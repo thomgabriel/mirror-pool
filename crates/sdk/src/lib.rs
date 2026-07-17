@@ -439,6 +439,12 @@ pub fn stake_account_pda(pool: Pubkey, intent_pda: Pubkey) -> Pubkey {
 /// `build_execute_round_ix` (rather than a shared/branching one) because the
 /// two pool kinds need structurally different `remaining_accounts` shapes and
 /// this is still the only caller of either.
+///
+/// The caller MUST prepend an adequate
+/// `ComputeBudgetInstruction::set_compute_unit_limit(...)` for the round: the
+/// stake path runs 4 CPIs + a `find_program_address` per intent, measured
+/// ~55,300 CU at k=2 (`execute_round_stakes_the_batch_uniformly`); the spec's
+/// target k≈17 needs proportionally more headroom than the 400k default.
 #[allow(deprecated)] // `stake::config::ID` — the Stake program still requires this account in DelegateStake's CPI even though the type is deprecated.
 pub fn build_execute_stake_round_ix(
     pool: Pubkey,

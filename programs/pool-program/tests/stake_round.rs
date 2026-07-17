@@ -452,6 +452,94 @@ fn execute_round_stake_rejects_intent_from_another_pool() {
     );
 }
 
+// `commit_intent` enforces `fee == pool.stake_fee` at commit time, so a
+// normal flow can never produce a mismatched fee — this crafts an `Intent`
+// account directly (bypassing `commit_intent`) to exercise `execute_round`'s
+// defense-in-depth re-check, the same way `..._rejects_intent_from_another_pool`
+// crafts a foreign-pool intent above.
+#[test]
+fn execute_round_stake_rejects_wrong_fee() {
+    use anchor_lang::AccountSerialize;
+    use pool_program::round::{ActionKind, Intent};
+    use solana_sdk::account::Account;
+
+    let stake_fee = 5_000u64;
+    let mut fx = build_stake_round_fixture(2, 2, stake_fee);
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 0, 0))
+        .unwrap();
+    fx.svm.expire_blockhash();
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, 1, 0))
+        .unwrap();
+
+    // A program-owned Intent (correct discriminator), correctly bound to THIS
+    // pool/round, but with `fee != pool.stake_fee`.
+    let wrong_fee = Intent {
+        pool: fx.pool,
+        round_id: 0,
+        recipient: Pubkey::new_unique(),
+        relayer: Pubkey::new_unique(),
+        fee: stake_fee + 1, // NOT pool.stake_fee
+        action: ActionKind::Stake,
+    };
+    let mut data = Vec::new();
+    wrong_fee.try_serialize(&mut data).unwrap();
+    let wrong_fee_addr = Pubkey::new_unique();
+    fx.svm
+        .set_account(
+            wrong_fee_addr,
+            Account {
+                lamports: 10_000_000,
+                data,
+                owner: program_id(),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+
+    let cranker = Keypair::new();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
+    // Replace intent 1 with the wrong-fee intent; its stake account / relayer
+    // slots are unreachable (the fee check fires before either is read), so
+    // any well-formed placeholders suffice.
+    let triples = vec![
+        (
+            fx.intents[0].intent_pda,
+            stake_pda(fx.pool, fx.intents[0].intent_pda),
+            fx.intents[0].relayer,
+        ),
+        (wrong_fee_addr, Pubkey::new_unique(), Pubkey::new_unique()),
+    ];
+    fx.svm.expire_blockhash();
+    let ix = execute_round_stake_ix(&fx, 0, cranker.pubkey(), &triples);
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            ix,
+        ],
+        Some(&cranker.pubkey()),
+    );
+    let outcome = fx
+        .svm
+        .send_transaction(Transaction::new(
+            &[&cranker],
+            msg,
+            fx.svm.latest_blockhash(),
+        ))
+        .expect_err("an intent with fee != pool.stake_fee must be rejected");
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|l| l.contains("WrongActionConfig")),
+        "expected WrongActionConfig; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
 #[test]
 fn execute_round_stake_rejects_duplicate_intent() {
     let stake_fee = 5_000u64;

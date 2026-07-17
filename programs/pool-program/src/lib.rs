@@ -139,7 +139,7 @@ pub mod pool_program {
         fee: u64,
         round_id: u64,
     ) -> Result<()> {
-        {
+        let action_kind = {
             let pool = ctx.accounts.pool.load()?;
             require!(round_id == pool.current_round_id, PoolError::WrongRound);
             require!(
@@ -151,7 +151,8 @@ pub mod pool_program {
             if pool.action_kind == 1 {
                 require!(fee == pool.stake_fee, PoolError::WrongActionConfig);
             }
-        }
+            pool.action_kind
+        };
         require!(
             ctx.accounts.round.state == crate::round::RoundState::Open,
             PoolError::RoundClosed
@@ -176,7 +177,11 @@ pub mod pool_program {
         intent.recipient = ctx.accounts.recipient.key();
         intent.relayer = ctx.accounts.relayer.key();
         intent.fee = fee;
-        intent.action = crate::round::ActionKind::Withdraw;
+        intent.action = match action_kind {
+            0 => crate::round::ActionKind::Withdraw,
+            1 => crate::round::ActionKind::Stake,
+            _ => return err!(PoolError::WrongActionConfig),
+        };
 
         let round = &mut ctx.accounts.round;
         round.intent_count = round
