@@ -2,7 +2,7 @@
 title: "Behavioral rounds — follow-up systems proposal (from k-candidates to k-anonymity)"
 date: 2026-07-16
 status: THINKING MATERIAL — a proposal for consideration; does NOT edit Plan 4, the spec, or shipped code
-companion_to: 2026-07-16-behavioral-privacy-industry-practices.md
+companion_to: behavioral-privacy-industry-practices.md
 method: 6 deepening research fronts (Sybil-pricing, anonymity harness, funding-topology, coordinator trust, disclosure, cross-round intersection), each fact-checked; cross-related with the code audit + research-1; adversarially critiqued for YAGNI / feasibility / bounty-fit
 caveat: >-
   Produced by a parallel research pass while Plan 4 was in flight. Every item is an option, not a plan change.
@@ -55,7 +55,7 @@ Three studies, one story:
   ties an intent to a distinct person or funding source.
 - **(B) research-1** ([`docs/research/prior-art.md`](docs/research/prior-art.md)) established
   that behavioral pooling is genuine white space, that **timing correlation is the dominant
-  attack** (Tornado FIFO temporal matching reached 34.7% of withdrawals), and that mirror-pool
+  attack** (Tornado FIFO temporal matching is the dominant deanonymization lever), and that mirror-pool
   must *invent* three things: set-membership over actions, timing-correlation defeat, and the
   coordinator incentive/anti-Sybil model. Its load-bearing sharpening: **the k-floor buys k
   candidates, not k-anonymity.**

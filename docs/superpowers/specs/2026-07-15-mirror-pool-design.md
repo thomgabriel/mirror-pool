@@ -176,7 +176,7 @@ sub-`k` batches rejected on-chain.
 | Adversary | Attack | Defense |
 |---|---|---|
 | Clustering / AI attribution | Link wallets to one entity | Uniform actor (no common-input); fresh unlinkable output notes |
-| Timing correlation (FIFO 34.7%) | Match deposit→action→exit by time | `k`-floor + simultaneous batching; decouple deposit-time from action-time; jitter; per-member rate limits |
+| Timing correlation | Match deposit→action→exit by time | `k`-floor + simultaneous batching; decouple deposit-time from action-time; jitter; per-member rate limits |
 | Amount fingerprinting | Distinctive amounts | Discretized denomination buckets; non-standard amounts rejected/split |
 | Sybil / set poisoning | Join N times to fake the crowd | Bond cost per membership (poisoning costs capital). *Residual:* not fully solved; optional per-round diversity heuristics |
 | Malicious coordinator | Censor/reorder/force thin round | `k`-floor **on-chain**; client-side proving; permissionless coordinators; user self-submit / `emergency_withdraw` |

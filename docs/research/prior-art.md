@@ -115,13 +115,15 @@ templates* (same protocol, discretized amount buckets) or the crowd dissolves.
 
 ---
 
-## 3. Threat model: the number that matters
+## 3. Threat model: timing correlation is the dominant attack
 
-From a 2025 arXiv cross-chain analysis of Tornado Cash deanonymization:
-
-- Address reuse + transactional linkage alone deanonymized **5.1–12.6%** of
-  withdrawals.
-- Adding a **FIFO temporal-matching heuristic pushed this to 34.7%**.
+The empirical mixer-deanonymization literature (Wu et al. 2022 / Tutela;
+Wang et al. WWW'23) is consistent: deployed ZK mixers leak well below their
+advertised anonymity set through timing and metadata, not broken crypto, and a
+**FIFO temporal-matching heuristic** is repeatedly the single biggest linkage
+lever. (An early 2025 cross-chain preprint attached a specific number to the
+FIFO lift; it was withdrawn 2025-11-18 for reference errors, so we cite the
+*direction*, not the digit — corroborated by the non-withdrawn primaries above.)
 
 **Implication for mirror-pool:** timing correlation is the *dominant* attack on
 any pool. A *behavioral* pool that fires actions on a schedule is **more**
@@ -136,7 +138,7 @@ solved, reusable pattern.
 
 1. **Set membership over *actions*, not denominated notes** — define "the same
    action" such that N of them are mutually indistinguishable on-chain.
-2. **Defeating cross-crowd timing correlation** — the 34.7% attack above, applied
+2. **Defeating cross-crowd timing correlation** — the timing-correlation attack above, applied
    to a crowd of synchronized intents.
 3. **Coordinator incentive + anti-Sybil model** — keep the crowd deep when a
    participant does not currently need cover (their presence *is* others' cover),

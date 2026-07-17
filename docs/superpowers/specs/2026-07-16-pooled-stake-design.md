@@ -5,7 +5,7 @@
 > architecture spec ([`2026-07-15-mirror-pool-design.md`](2026-07-15-mirror-pool-design.md)) §3.1
 > "action-adapters" and §2 phase 3 ("PooledAction adapters → behavioral pooling — the novel core").
 > **Informed by:** the verified follow-up research
-> ([`docs/research/2026-07-16-behavioral-rounds-followup-proposal.md`](../../research/2026-07-16-behavioral-rounds-followup-proposal.md))
+> ([`docs/research/behavioral-rounds-followup-proposal.md`](../../research/behavioral-rounds-followup-proposal.md))
 > and its adversarial critic ("build the second pooled *action*, not a sixth privacy layer on the exit").
 
 ---
