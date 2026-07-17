@@ -188,11 +188,10 @@ fn commit_intent_rejects_fee_over_denomination() {
     );
 }
 
-// Plan 5 Task 1: a stake pool requires every intent's fee to exactly equal the
-// pool's configured `stake_fee` (uniform delegation amount — see lib.rs's
-// commit_intent doc note on the privacy/liveness rationale). Reuse intent 0's
-// real proof (the fee guard fires before proof verification) but set a
-// mismatched fee in the instruction data.
+// A stake pool requires every intent's fee to exactly equal the pool's
+// configured `fee` (uniform amount — see lib.rs's commit_intent payout-uniformity
+// note). Reuse intent 0's real proof (the fee guard fires before proof
+// verification) but set a mismatched fee in the instruction data.
 #[test]
 fn commit_intent_rejects_wrong_stake_fee() {
     let stake_fee = 5_000u64;
