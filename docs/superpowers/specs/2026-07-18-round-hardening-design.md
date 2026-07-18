@@ -53,10 +53,11 @@ actually observe each:
    static arithmetic comment goes stale the moment someone adds a per-intent account; a
    compiled-tx assertion catches it. (The implementer still verifies the LiteSVM-lock-enforcement
    assumption and records the answer in the test's comments.)
-2. *Compute — in-VM measurement:* a LiteSVM sweep executes real rounds at increasing `k` for
-   **both** action kinds, each transaction carrying a `SetComputeUnitLimit` instruction, and
-   records CU consumed; the sweep establishes whether stake is lock-bound (≈17) or compute-bound
-   near k≈16 — the open question the estimate cannot answer.
+2. *In-VM measurement:* a LiteSVM sweep executes real rounds at increasing `k` for **both**
+   action kinds, each transaction carrying a `SetComputeUnitLimit` instruction, and records CU
+   consumed; the sweep establishes the binding dimension per kind — a question the estimate
+   could not answer (and answered it with a wall the estimate never modeled: see the measured
+   result below).
 
 The shipped constant is **1 below the measured ceiling** (headroom for cranker-added
 priority-fee/tip instructions and accounts). The spec of record (this file) and README Limitations
