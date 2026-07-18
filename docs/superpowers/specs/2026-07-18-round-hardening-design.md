@@ -42,8 +42,11 @@ leader-grindable by exactly the party that controls ordering and timing.
 - `initialize_pool`: `require!(k_floor <= max_k(kind), KFloorTooHigh)` — a pool whose floor exceeds
   the envelope could never execute any round.
 - `commit_intent`: after the existing `checked_add`, `require!(round.intent_count <= max_k(kind),
-  RoundFull)`. `MAX_K` is the maximum **executable** count (`<=` after increment). `cancel_intent`
-  already decrements `intent_count`, so a full round can free a slot before execution.
+  RoundFull)`. `MAX_K` is the maximum **executable** count (`<=` after increment). This
+  deliberately diverges from `solana-execution-limits.md` §2's `< MAX_K` phrasing — `<` after the
+  increment would silently cap real rounds one below the constant; the `<=` form is what makes the
+  "exactly-`MAX_K` executes" guard test coherent. `cancel_intent` already decrements
+  `intent_count`, so a full round can free a slot before execution.
 
 **Pinning methodology — measured, not estimated.** The constant is set by a sweep, and the two
 binding dimensions are pinned by the method that can actually observe each:
@@ -60,7 +63,9 @@ binding dimensions are pinned by the method that can actually observe each:
 The shipped constant is **1 below the measured ceiling** (headroom for cranker-added
 priority-fee/tip instructions and accounts). The spec of record (this file, updated at
 implementation time) and README Limitations both carry the measured raw ceiling *and* the shipped
-constant. Conservative expectations from the arithmetic: withdraw ceiling ≈ 19, stake ≈ 16–17.
+constant. Two pre-measurement number sets exist and neither is authoritative: the raw lock
+arithmetic gives ceilings of withdraw ≈ 19 / stake ≈ 16–17 (`solana-execution-limits.md` §1), and
+the brief's buffered starting points are withdraw ≈ 16 / stake ≈ 13; the sweep supersedes both.
 
 *Caveat the implementer must resolve:* verify whether LiteSVM enforces `MAX_TX_ACCOUNT_LOCKS` at
 all. If it does, the sweep observes the lock wall directly; if not, dimension 1's arithmetic
@@ -132,6 +137,13 @@ decide the mitigation concretely (proof caching across the test, parallel provin
   (cross-round timing, §6.7) is untouched — that residual stays disclosed, not absorbed into the
   ordering claim. The cranker also still chooses *when* to execute; only *within-batch position*
   is removed as a signal.
+- **The sort key is hiding but not *binding* (disclosed residual):** `nullifier_hash =
+  Poseidon(nullifier)` and the `nullifier` is a private value the depositor freely chooses at
+  note-creation, so a participant can grind their own nullifier offline to place *their own*
+  intent at a chosen batch position. This does not reopen the fixed gap: self-placement reveals
+  nothing about co-participants (each key is independently chosen before anyone sees the others,
+  and the total order is still outside the *cranker's* control — which is the discretion B
+  removes). Named per the project's disclosure standard, not absorbed.
 - **The v0+ALT requirement stays off-chain** (SDK docs + soak): a program cannot observe its own
   transaction's version or account-resolution mechanism, so there is nothing to encode on-chain.
 
