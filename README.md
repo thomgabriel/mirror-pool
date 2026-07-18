@@ -134,7 +134,8 @@ Local-only (`main` is ahead of `origin`, not yet pushed). Shipped and merged:
 | Plan 5 | Pooled native-stake (the 2nd `PooledAction`, vault-unilateral delegation) |
 | Plan 6a | Timeout-gated `cancel_intent` |
 | Pool.fee | One mandatory pool-wide fee — closes a withdraw-pool amount fingerprint + nominal anti-Sybil tax |
-| 6b (in progress) | `crates/effective-k` — the effective-k measurement core |
+| Plan 6b | `crates/effective-k` — the min-entropy effective-k measurement core |
+| Research | Frontier-delta validation — Smith 2009 (QIF) anchored as effective-k's definitional source; the Solana execution-limits (`MAX_K`) envelope; two open mechanism gaps disclosed honestly |
 
 Every phase was built via spec → plan → TDD, with an independent review gate on the spec, the
 plan, and the merged branch.
