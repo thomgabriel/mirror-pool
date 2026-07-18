@@ -99,10 +99,16 @@ Where the guarantee stops:
 - **The `k`-floor is a *liveness* gate, not a measure of realized anonymity.** One funder who
   self-fills `m` of the `k` notes ("whale self-fill") collapses the effective anonymity toward 1.
   `crates/effective-k` *measures* this residual (`k_∞ = k/m`); it does not remove it.
-- **The per-round anonymity set is bounded to ~17–19 by Solana itself.** `execute_round` settles the
-  whole round in one vault-signed transaction, so the 64-account-lock limit caps a round at ~17 (stake)
-  / ~19 (withdraw). This is a *size* ceiling independent of whale self-fill; a larger `k` would need
-  chunked execution we deliberately don't build (see `docs/research/solana-execution-limits.md`).
+- **The per-round anonymity-set size is capped by the Solana transaction envelope, now enforced
+  on-chain**: `MAX_K` = 17 (withdraw) / 10 (stake), pinned by measurement (measured ceilings
+  18/11, shipped one below for cranker headroom). `execute_round` settles the whole round in one
+  vault-signed transaction, so a round can never grow past what that transaction can settle. The
+  two kinds are bound by *different* dimensions: withdraw by the 64-account-lock limit
+  (compute-clean to k=21); stake by the 32 KB SBF heap (a bump allocator that never frees — hits
+  out-of-memory at k=12, well below the lock or compute ceilings, and not liftable by the cranker
+  via `request_heap_frame`, which was measured to change nothing). A larger `k` would need chunked
+  execution (not built) or an on-chain custom allocator (stake only; future work) — see
+  `docs/research/solana-execution-limits.md`.
 - **A residual mechanism gap is documented, not hidden.** The stake path's create-vs-normalize branch
   leaves a per-intent inner-instruction / vault-debit *shape* difference when a stake PDA is pre-funded
   (a chain-observable distinguisher) — analyzed in `docs/research/` rather than narrated away.

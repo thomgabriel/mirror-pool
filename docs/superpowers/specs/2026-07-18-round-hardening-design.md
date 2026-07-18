@@ -59,11 +59,40 @@ actually observe each:
    near k≈16 — the open question the estimate cannot answer.
 
 The shipped constant is **1 below the measured ceiling** (headroom for cranker-added
-priority-fee/tip instructions and accounts). The spec of record (this file, updated at
-implementation time) and README Limitations both carry the measured raw ceiling *and* the shipped
-constant. Two pre-measurement number sets exist and neither is authoritative: the raw lock
-arithmetic gives ceilings of withdraw ≈ 19 / stake ≈ 16–17 (`solana-execution-limits.md` §1), and
-the brief's buffered starting points are withdraw ≈ 16 / stake ≈ 13; the sweep supersedes both.
+priority-fee/tip instructions and accounts). The spec of record (this file) and README Limitations
+both carry the measured raw ceiling *and* the shipped constant.
+
+**Measured 2026-07-18** (`programs/pool-program/tests/max_k.rs::sweep_execute_round_ceiling`;
+full tables in the Task 1 report):
+
+- **Withdraw is lock-bound, not compute-bound.** The sweep found no failure of any kind (compute
+  or otherwise) up to k=21 — 133,929 CU at k=21, well under the 1.4M budget. The ceiling is set
+  entirely by the 64-account-lock arithmetic, `⌊(64-9)/3⌋ = 18` (conservative, counting the ALT
+  table account itself). Shipped one below: **`MAX_K_WITHDRAW = 17`**.
+- **Stake is heap-bound, not lock- or compute-bound** — a material correction to this section's
+  earlier ≈16–17 estimate. The sweep hits `ProgramFailedToComplete` / "memory allocation failed,
+  out of memory" at k=12 (only ~270k CU extrapolated, far under budget, and far short of the
+  lock-arithmetic bound `⌊(64-15)/3⌋ = 16`). Root cause: `solana_program`'s default global
+  allocator is a 32 KiB bump allocator that never frees, and each stake intent's 5 CPIs
+  (`create_account`/`initialize`/`delegate_stake`/`authorize`/fee-transfer) accumulate allocations
+  across the round. Re-measured with `ComputeBudgetInstruction::request_heap_frame(256 KiB)`:
+  identical failure at the identical k — the wall is **not liftable by the cranker**; only a
+  custom on-chain allocator could raise it (out of this plan's scope; future work). Shipped one
+  below the measured ceiling of 11: **`MAX_K_STAKE = 10`**.
+- **LiteSVM-lock-enforcement answer (fork finding A1's open question):** legacy `Message`s cannot
+  reach either ceiling at all — they hard-panic (not a graceful `TransactionError`) once total
+  account keys exceed 38, from `solana-compute-budget-instruction`'s internal
+  `ComputeBudgetProgramIdFilter` array bound (`FILTER_SIZE = PACKET_DATA_SIZE / 32 = 38`), which
+  binds tighter than either the 64-account-lock wall or this section's original ~35-account
+  legacy-MTU estimate. The sweep and both guard-test layers therefore compile real v0+ALT
+  `VersionedTransaction`s throughout — confirming LiteSVM enforces neither the 64-lock nor any
+  compute ceiling for an in-range resolved v0+ALT key set, which is exactly why the compiled-tx
+  key-count test (`crates/sdk/tests/tx_envelope.rs`) is the authoritative lock guard rather than
+  an in-VM assertion.
+
+The two pre-measurement number sets this section previously carried (raw lock arithmetic:
+withdraw ≈ 19 / stake ≈ 16–17; the brief's buffered starting points: withdraw ≈ 16 / stake ≈ 13)
+are both superseded by the measurement above.
 
 ### Permanent guard tests (LiteSVM + host)
 
