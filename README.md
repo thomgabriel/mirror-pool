@@ -43,7 +43,7 @@ off-chain-computed value can never silently disagree with what the chain checks)
 | Layer | Where | What |
 |---|---|---|
 | **On-chain program** | [`programs/pool-program`](programs/README.md) | The custody + round-engine: `initialize_pool` / `deposit` / `commit_intent` / `execute_round` / `cancel_intent`, the on-chain `k`-floor, the Poseidon accumulator, the Groth16 verifier, and the `PooledAction` adapters. |
-| **Circuits** | [`circuits/`](circuits/README.md) | The circom withdraw circuit (membership + nullifier) and its Groth16 setup. |
+| **Circuits** | [`circuits/`](circuits/README.md) | The circom membership circuit (note ownership + nullifier + extDataHash), shared by *every* action, and its Groth16 setup. |
 | **Host crates** | [`crates/`](crates/README.md) | The client SDK, the Rust ZK prover, the shared `extDataHash`, build-time tooling, and the effective-k analysis instrument. |
 
 Design & decisions live in [`docs/superpowers/specs/`](docs/superpowers/specs); the research that
@@ -74,6 +74,13 @@ Each non-obvious choice traces to a specific result in the literature:
   exactly the finding that a `k`-sized group fails under a *homogeneity* attack — one value holding
   most of the mass. mirror-pool's "whale self-fill" residual is that attack re-cast: one funder
   owning `m` of the `k` notes, which min-entropy effective-k catches precisely (`k_∞ = k/m`).
+
+- **And *not* differential privacy — a category apart, not a gap.** DP and its metric/Bayesian
+  variants (geo-indistinguishability, Pufferfish, AnoA) bound how much a *noise-adding, randomized*
+  mechanism leaks about an individual record. mirror-pool adds no noise: it hides *which of `k`
+  identical actions* a funder initiated — set-based unlinkability, measured combinatorially. There is
+  no randomized release for an `ε` to bound, so the honest tool is min-entropy. (Full boundary in
+  [`docs/research/`](docs/research).)
 - **Batch on one timestamp behind a uniform actor, because timing and metadata break mixers — not
   the crypto.** Empirical studies of deployed Tornado-style pools (Wu et al., *Tutela*, 2022; Wang
   et al., WWW 2023) show they leak *well below* their advertised set via timing, address-reuse, and
@@ -169,7 +176,7 @@ Lint/supply-chain gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D 
 ```
 programs/pool-program/   on-chain Anchor program        → programs/README.md
 crates/                  host-side crates (SDK, prover, tooling, analysis) → crates/README.md
-circuits/                circom withdraw circuit + Groth16 setup → circuits/README.md
+circuits/                circom membership circuit + Groth16 setup → circuits/README.md
 docs/research/           the research that grounds the design
 docs/superpowers/        specs (designs) and plans (implementation)
 deny.toml                cargo-deny supply-chain policy

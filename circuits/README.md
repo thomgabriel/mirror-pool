@@ -3,7 +3,12 @@
 The zero-knowledge circuits — a circom Groth16 proof of note membership, over the *same*
 Poseidon/Merkle hashes the on-chain program uses.
 
-## What the `withdraw` circuit proves
+> **Naming:** the file is still `circom/withdraw.circom` for legacy reasons — it proves *membership*
+> and is used by **every** action (both `Withdraw` and `Stake` clear `commit_intent` with this same
+> proof), not just withdrawals. A rename to `membership.circom` (+ the `WithdrawProof` /
+> `verify_withdraw` / `WITHDRAW_VK` cascade) is tracked in the structure-polish pass.
+
+## What the membership circuit proves
 
 Given the private witnesses (a note's `secret`/`nullifier` and its Merkle path), it proves three
 things without revealing which note:
