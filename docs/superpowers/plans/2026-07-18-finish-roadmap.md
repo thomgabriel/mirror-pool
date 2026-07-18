@@ -58,6 +58,30 @@ coordinator-independent, timeout-gated reclaim). Not a gap.
 
 ---
 
+## Sequencing reconciliation (2026-07-18) — checked against the repo, not assumed
+
+Both lanes independently agree on the leverage lens (verifiability > more mechanism > CI optics >
+hygiene; the soak is the top prize). Reconciling the deltas, with the concrete claims verified via
+`git`/`gh`:
+
+- **CI is GREEN, not red.** The bincode / RUSTSEC-2025-0141 ignore (`71a0630`) is already on `origin`
+  (ancestor of `origin/main` = `7ae70cb`), and the latest CI run on `origin/main` is `success`. There is
+  **no "push to fix a red CI" action**. What's unpushed is **8 docs-only commits** (this research + README
+  polish + this roadmap) — zero code, zero CI impact.
+- **"Phase 0" is a *decision*, not a fix — push the docs?** Pushing makes the honest, Smith-anchored
+  README and the research corpus visible to a browsing judge (real *presentation* value, no code risk).
+  It is the user's explicit-yes gate; recommendation is a clear yes, but never auto-done.
+- **The soak does NOT wait on all of F1.** Its headline — uniform *signer*, zero participant signatures —
+  is already true today, so soak-first is defensible. One coupling only: **canonical ordering changes
+  `execute_round`'s account interface**, so *if* we do that fix, do it *just before* the soak (build the
+  soak once against the final interface, asserting canonical order) rather than soak-then-re-soak.
+  **MAX_K** changes no interface and doesn't affect a small-`k` demo — a parallel correctness fix, anytime.
+- **Soak runtime = `solana-test-validator`, honestly scoped** (the building lane's call, and the more
+  honest one): universally reproducible; the stake round delegates to a *self-created* vote account — a
+  genuine stake-program round, framed as exactly that in the proof doc, **not** "a real mainnet validator."
+- **Implementation rides feature branches, not `main`** (as every prior plan did) — the two lanes share
+  one repo; branch → whole-branch review → merge keeps histories clean.
+
 ## Sequence (implementation lane runs these in order; ★ = parallelizable anytime)
 
 1. **F1 — Round-engine hardening.** `MAX_K` cap (`task_b3a08dd7`) + canonical batch ordering. Foundational:
@@ -84,8 +108,9 @@ LiteSVM sweep** (don't hard-code the ~17/19 estimate). Canonical ordering: `exec
 `remaining_accounts` sorted by each intent's nullifier/commitment (fixed & hiding at commit) — reject a
 SlotHashes shuffle (leader-grindable). See `docs/research/solana-execution-limits.md`.
 
-**F2a · SOAK** — one RPC-agnostic binary: the withdraw uniform-actor round + live effective-k runs
-against *any* validator (the reproducibility floor); the real-stake round is a surfpool-gated add-on.
+**F2a · SOAK** — runtime `solana-test-validator` (universally reproducible, no surfpool dependency): the
+withdraw uniform-actor round + live effective-k, plus a stake round that delegates to a *self-created*
+vote account — a genuine stake-program round, framed as exactly that, **not** "a real mainnet validator."
 **Guard:** assert the headline — *zero participant signatures* — by reading the **actual landed-tx signer
 set**, not by trusting code. Assert only independently-checkable on-chain facts (value conservation,
 byte-uniform payouts, canonical order). The proof doc is a real run log with lookup-able tx signatures —
