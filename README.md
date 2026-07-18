@@ -75,12 +75,6 @@ Each non-obvious choice traces to a specific result in the literature:
   most of the mass. mirror-pool's "whale self-fill" residual is that attack re-cast: one funder
   owning `m` of the `k` notes, which min-entropy effective-k catches precisely (`k_∞ = k/m`).
 
-- **And *not* differential privacy — a category apart, not a gap.** DP and its metric/Bayesian
-  variants (geo-indistinguishability, Pufferfish, AnoA) bound how much a *noise-adding, randomized*
-  mechanism leaks about an individual record. mirror-pool adds no noise: it hides *which of `k`
-  identical actions* a funder initiated — set-based unlinkability, measured combinatorially. There is
-  no randomized release for an `ε` to bound, so the honest tool is min-entropy. (Full boundary in
-  [`docs/research/`](docs/research).)
 - **Batch on one timestamp behind a uniform actor, because timing and metadata break mixers — not
   the crypto.** Empirical studies of deployed Tornado-style pools (Wu et al., *Tutela*, 2022; Wang
   et al., WWW 2023) show they leak *well below* their advertised set via timing, address-reuse, and
