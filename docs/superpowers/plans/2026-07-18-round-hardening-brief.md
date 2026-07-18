@@ -37,9 +37,18 @@ encode the "cranker must use v0+ALT" requirement anywhere on-chain or leave it t
 
 ---
 
-## Item B — Canonical batch ordering (completes the uniform-actor claim)
+## Item B — Canonical batch ordering — **DROPPED (fork spec-review, 2026-07-18)**
 
-**Problem (source-confirmed).** `execute_round` iterates `remaining_accounts` in the **order the cranker
+> **Retraction.** The anonymity claim below is vacuous and Item B was dropped at the spec-review
+> gate: the intent↔recipient pairing is bound inside each `[intent, recipient, relayer]` triple
+> (order-independent), `commit_intent`'s own transaction publicly names the recipient, and
+> `(recipient, committed_slot)` sit in the never-closed Intent PDA — so batch position cannot
+> re-link what was never unlinked; the funding secret is ZK-protected and orthogonal to order.
+> Full record: spec `2026-07-18-round-hardening-design.md` §5; research corrected in `14e6d49`
+> (`anonymity-frontier-and-antisybil.md` §6.5, `solana-execution-limits.md` §4). The text below
+> is retained unedited as the historical input the review overturned.
+
+**Problem (source-confirmed — retracted, see banner).** `execute_round` iterates `remaining_accounts` in the **order the cranker
 supplies** (`for i in 0..count` over `rem[i*3..]`), with no on-chain shuffle; `commit_intent` records only
 `committed_slot`. So batch **position** can re-link initiator → action *after* the crypto succeeds — the
 disclosed ordering side-channel. See `anonymity-frontier-and-antisybil.md` §6.5, `solana-execution-limits.md` §4.
