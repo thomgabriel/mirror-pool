@@ -441,3 +441,78 @@ fn initialize_withdraw_pool_rejects_fee_over_denomination() {
         outcome.meta.logs
     );
 }
+
+#[test]
+fn initialize_pool_rejects_k_floor_above_max_k() {
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 10_000_000_000).unwrap();
+    svm.add_program_from_file(program_id(), so_path()).unwrap();
+
+    let mint = Pubkey::new_unique();
+    let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
+    let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+
+    // A floor above MAX_K could never execute any round — rejected at init.
+    let ix = initialize_pool_ix(
+        pool,
+        vault,
+        round,
+        mint,
+        payer.pubkey(),
+        1_000_000,
+        pool_program::invariants::MAX_K_WITHDRAW + 1,
+        0,
+        Pubkey::default(),
+        0,
+    );
+    let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
+    let outcome = svm
+        .send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
+        .expect_err("k_floor above MAX_K must be rejected");
+    assert!(
+        outcome
+            .meta
+            .logs
+            .iter()
+            .any(|l| l.contains("KFloorTooHigh")),
+        "expected KFloorTooHigh; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+#[test]
+fn initialize_pool_accepts_k_floor_equal_to_max_k() {
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 10_000_000_000).unwrap();
+    svm.add_program_from_file(program_id(), so_path()).unwrap();
+
+    let mint = Pubkey::new_unique();
+    let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
+    let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+
+    let ix = initialize_pool_ix(
+        pool,
+        vault,
+        round,
+        mint,
+        payer.pubkey(),
+        1_000_000,
+        pool_program::invariants::MAX_K_WITHDRAW,
+        0,
+        Pubkey::default(),
+        0,
+    );
+    let msg = Message::new(&[cu_limit_ix(), ix], Some(&payer.pubkey()));
+    svm.send_transaction(Transaction::new(&[&payer], msg, svm.latest_blockhash()))
+        .expect("k_floor == MAX_K is the boundary and must succeed");
+}

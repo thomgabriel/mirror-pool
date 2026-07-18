@@ -30,7 +30,7 @@ two hardening fixes, two scoped additions, and drawing an honest future-work bou
 
 | Item | Why it's in |
 |---|---|
-| Round-engine hardening (MAX_K + canonical ordering) | Closes a latent fund-stranding bug and *completes* the uniform-actor claim |
+| Round-engine hardening (MAX_K cap) | Closes a latent fund-stranding bug. (Canonical ordering was dropped at the F1 spec gate — not an anonymity gap; see spec §5 + `14e6d49`) |
 | SOAK + proof doc | The live, reproducible run — the verification tier LiteSVM can't reach |
 | §6.5 adversarial simulation | The empirical "it actually hides" proof the spec promised — and an honest contrast to a rigged harness |
 | Opt-in viewing-key disclosure | Serves the prior-art lesson (every survivor bolts on selective disclosure); a real distinguisher |
@@ -71,11 +71,10 @@ hygiene; the soak is the top prize). Reconciling the deltas, with the concrete c
 - **"Phase 0" is a *decision*, not a fix — push the docs?** Pushing makes the honest, Smith-anchored
   README and the research corpus visible to a browsing judge (real *presentation* value, no code risk).
   It is the user's explicit-yes gate; recommendation is a clear yes, but never auto-done.
-- **The soak does NOT wait on all of F1.** Its headline — uniform *signer*, zero participant signatures —
-  is already true today, so soak-first is defensible. One coupling only: **canonical ordering changes
-  `execute_round`'s account interface**, so *if* we do that fix, do it *just before* the soak (build the
-  soak once against the final interface, asserting canonical order) rather than soak-then-re-soak.
-  **MAX_K** changes no interface and doesn't affect a small-`k` demo — a parallel correctness fix, anytime.
+- **The soak does NOT wait on F1 at all** (updated 2026-07-18): canonical ordering — the only
+  interface coupling — was dropped at the F1 spec gate (not an anonymity gap; spec §5, `14e6d49`).
+  **MAX_K** changes no interface and doesn't affect a small-`k` demo — the soak and F1 are fully
+  parallel tracks.
 - **Soak runtime = `solana-test-validator`, honestly scoped** (the building lane's call, and the more
   honest one): universally reproducible; the stake round delegates to a *self-created* vote account — a
   genuine stake-program round, framed as exactly that in the proof doc, **not** "a real mainnet validator."
@@ -84,8 +83,9 @@ hygiene; the soak is the top prize). Reconciling the deltas, with the concrete c
 
 ## Sequence (implementation lane runs these in order; ★ = parallelizable anytime)
 
-1. **F1 — Round-engine hardening.** `MAX_K` cap (`task_b3a08dd7`) + canonical batch ordering. Foundational:
-   the soak and the sim should showcase the *hardened* system, and F1 adds guarantees they will assert.
+1. **F1 — Round-engine hardening.** The `MAX_K` cap (`task_b3a08dd7`) only — canonical batch
+   ordering was dropped at the spec gate (spec §5). No longer blocks the soak; F2a may run in
+   parallel.
 2. **F2a — SOAK + proof doc.** The other Claude is already brainstorming this. Capstone live proof.
 3. **F2b — §6.5 adversarial simulation.** The empirical privacy proof. Host-side, no surfpool dependency.
 4. **F3 — Opt-in viewing-key disclosure.** Independent feature (SDK-side); could also run ★-parallel.
@@ -102,11 +102,13 @@ deliverables. F1 stays first.*
 ## Per-item notes + the honesty guard on each
 
 **F1 · Round-engine hardening** — `commit_intent` has no upper bound on `intent_count`, so a round can
-grow permanently unexecutable → funds exit only via the linkable cancel path. Add `require!(intent_count
-< MAX_K)` at commit + `require!(k_floor <= MAX_K)` at init, **action-kind-aware**, `MAX_K` **pinned by a
-LiteSVM sweep** (don't hard-code the ~17/19 estimate). Canonical ordering: `execute_round` requires
-`remaining_accounts` sorted by each intent's nullifier/commitment (fixed & hiding at commit) — reject a
-SlotHashes shuffle (leader-grindable). See `docs/research/solana-execution-limits.md`.
+grow permanently unexecutable → funds exit only via the linkable cancel path. Add
+`require!(intent_count <= MAX_K)` after the increment at commit + `require!(k_floor <= MAX_K)` at
+init, **action-kind-aware**, `MAX_K` **pinned by measurement** (compiled-tx key-count guard for the
+lock dimension + LiteSVM CU sweep — don't hard-code the ~17/19 estimate). Canonical ordering was
+**dropped at the spec gate** (not an anonymity gap — the intent→recipient linkage is already public
+per the never-closed Intent PDA; spec §5, research corrected in `14e6d49`). See
+`docs/research/solana-execution-limits.md`.
 
 **F2a · SOAK** — runtime `solana-test-validator` (universally reproducible, no surfpool dependency): the
 withdraw uniform-actor round + live effective-k, plus a stake round that delegates to a *self-created*

@@ -58,6 +58,11 @@ solana-stake-interface = { version = "1.2", features = ["bincode"] }
 [dev-dependencies]
 litesvm = "=0.6.1"
 solana-sdk = "~2.2"
+# Builds a synthetic, always-active lookup table account (`svm.set_account`,
+# not a real on-chain create/extend flow) so `tests/max_k.rs`'s measurement
+# sweep can compile v0+ALT VersionedTransactions past legacy `Message`'s
+# ~38-account ceiling (see MAX_K_WITHDRAW's doc comment in invariants.rs).
+solana-address-lookup-table-interface = { version = "~2.2", features = ["bincode"] }
 # Native stake accounts are bincode-encoded (not Borsh) — `stake_round.rs`
 # deserializes `StakeStateV2` directly to assert the real on-chain delegation.
 bincode = "1"

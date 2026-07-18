@@ -758,6 +758,227 @@ pub fn build_stake_round_fixture_signer_recipients(
     )
 }
 
+/// Uniform fee for the cached STAKE material pool (mirrors stake_round.rs's
+/// per-test `stake_fee = 5_000`).
+pub const STAKE_FEE: u64 = 5_000;
+
+/// Size of each cached material pool: covers the largest guard test
+/// (MAX_K_WITHDRAW + 1 commits) plus sweep headroom above the ~19 lock-arithmetic
+/// ceiling.
+pub const MAX_CACHED_INTENTS: usize = 21;
+
+/// One pre-proven note: everything about an intent that does NOT depend on
+/// which pool/SVM instance it is used against (proofs bind root + nullifier +
+/// extDataHash only). PDAs are derived per-fixture.
+pub struct CachedMaterial {
+    pub note: Note,
+    pub proof: WithdrawProof,
+    pub root: [u8; 32],
+    pub nullifier_hash: [u8; 32],
+    pub recipient_keypair: [u8; 64],
+    pub relayer: Pubkey,
+    pub fee: u64,
+}
+
+fn generate_materials(fee: u64) -> Vec<CachedMaterial> {
+    let build_dir = ensure_build_artifacts();
+    let notes: Vec<Note> = (0..MAX_CACHED_INTENTS).map(|_| Note::new()).collect();
+    let mut tree = MerkleTree::new().unwrap();
+    for note in &notes {
+        tree.insert(note.commitment());
+    }
+    let root = tree.root();
+    notes
+        .iter()
+        .enumerate()
+        .map(|(i, note)| {
+            let recipient_kp = Keypair::new();
+            let relayer = Pubkey::new_unique();
+            let path = tree.authentication_path(i);
+            let ext = sdk::compute_ext_data_hash(
+                &recipient_kp.pubkey().to_bytes(),
+                &relayer.to_bytes(),
+                fee,
+            );
+            let inputs = sdk::WithdrawInputs {
+                root,
+                nullifier_hash: note.nullifier_hash(),
+                ext_data_hash: ext,
+                nullifier: note.nullifier(),
+                secret: note.secret(),
+                path_elements: path.elements,
+                path_indices: path.indices,
+            };
+            let (proof, public_inputs) = prover::prove_withdraw(
+                build_dir.join("withdraw_js").join("withdraw.wasm"),
+                build_dir.join("withdraw.r1cs"),
+                build_dir.join("withdraw.zkey"),
+                &inputs,
+            )
+            .expect("proving a cached note must succeed");
+            CachedMaterial {
+                note: *note,
+                proof: WithdrawProof {
+                    a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
+                    b: prover::g2_to_solana_be(&proof.b).unwrap(),
+                    c: prover::g1_to_solana_be(&proof.c).unwrap(),
+                },
+                root: public_inputs.root,
+                nullifier_hash: public_inputs.nullifier_hash,
+                recipient_keypair: recipient_kp.to_bytes(),
+                relayer,
+                fee,
+            }
+        })
+        .collect()
+}
+
+/// The ~21 Groth16 proofs are generated ONCE per test binary and shared by
+/// every cached fixture (the expensive part is pool-independent).
+pub fn cached_withdraw_materials() -> &'static [CachedMaterial] {
+    static M: OnceLock<Vec<CachedMaterial>> = OnceLock::new();
+    M.get_or_init(|| generate_materials(FEE))
+}
+
+pub fn cached_stake_materials() -> &'static [CachedMaterial] {
+    static M: OnceLock<Vec<CachedMaterial>> = OnceLock::new();
+    M.get_or_init(|| generate_materials(STAKE_FEE))
+}
+
+/// Build a fixture from a cached pool: fresh SVM + pool, deposit ALL
+/// MAX_CACHED_INTENTS commitments (the cached proofs bind the full-tree root,
+/// which lands in the pool's root ring), then materialize intents for the
+/// first `n`. Recipients are signer keypairs (index-aligned), so cancel tests
+/// work too.
+fn fixture_from_cache(
+    materials: &'static [CachedMaterial],
+    k_floor: u16,
+    n: usize,
+    action_kind: u8,
+) -> (RoundFixture, Vec<Keypair>) {
+    assert!(n <= MAX_CACHED_INTENTS, "cache holds {MAX_CACHED_INTENTS}");
+    let (denomination, fee, mut validator) = match action_kind {
+        0 => (DENOMINATION, FEE, Pubkey::default()),
+        1 => (
+            stake_pool_denomination(STAKE_FEE),
+            STAKE_FEE,
+            Pubkey::default(),
+        ),
+        _ => unreachable!("test fixture supports action kinds 0/1"),
+    };
+
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 100_000_000_000).unwrap();
+    svm.add_program_from_file(program_id(), so_path()).unwrap();
+    if action_kind == 1 {
+        validator = create_validator_vote_account(&mut svm, &payer);
+    }
+
+    let mint = Pubkey::new_unique();
+    let (pool, _) = Pubkey::find_program_address(&[b"pool", mint.as_ref()], &program_id());
+    let (vault, _) = Pubkey::find_program_address(&[b"vault", pool.as_ref()], &program_id());
+    let (round0, _) = Pubkey::find_program_address(
+        &[b"round", pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+
+    let mut data = disc("initialize_pool").to_vec();
+    data.extend_from_slice(&denomination.to_le_bytes());
+    data.extend_from_slice(&k_floor.to_le_bytes());
+    data.push(action_kind);
+    data.extend_from_slice(&validator.to_bytes());
+    data.extend_from_slice(&fee.to_le_bytes());
+    send(
+        &mut svm,
+        &payer,
+        &[&payer],
+        Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(pool, false),
+                AccountMeta::new(vault, false),
+                AccountMeta::new(round0, false),
+                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new_readonly(system_program::ID, false),
+            ],
+            data,
+        },
+    );
+
+    // Deposit every cached commitment so the pool's current root equals the
+    // root all cached proofs were generated against.
+    for m in materials.iter() {
+        let mut d = disc("deposit").to_vec();
+        d.extend_from_slice(&m.note.commitment());
+        d.extend_from_slice(&denomination.to_le_bytes());
+        send(
+            &mut svm,
+            &payer,
+            &[&payer],
+            Instruction {
+                program_id: program_id(),
+                accounts: vec![
+                    AccountMeta::new(pool, false),
+                    AccountMeta::new(vault, false),
+                    AccountMeta::new(payer.pubkey(), true),
+                    AccountMeta::new_readonly(system_program::ID, false),
+                ],
+                data: d,
+            },
+        );
+    }
+
+    let mut intents = Vec::with_capacity(n);
+    let mut recipient_keypairs = Vec::with_capacity(n);
+    for m in materials.iter().take(n) {
+        let recipient_kp = Keypair::from_bytes(&m.recipient_keypair).unwrap();
+        svm.airdrop(&recipient_kp.pubkey(), 1_000_000).unwrap();
+        let (intent_pda, _) = Pubkey::find_program_address(
+            &[b"intent", pool.as_ref(), m.nullifier_hash.as_ref()],
+            &program_id(),
+        );
+        let (nullifier_pda, _) = Pubkey::find_program_address(
+            &[b"nullifier", pool.as_ref(), m.nullifier_hash.as_ref()],
+            &program_id(),
+        );
+        intents.push(IntentMaterial {
+            note: m.note,
+            proof: m.proof.clone(),
+            root: m.root,
+            nullifier_hash: m.nullifier_hash,
+            recipient: recipient_kp.pubkey(),
+            relayer: m.relayer,
+            fee: m.fee,
+            intent_pda,
+            nullifier_pda,
+        });
+        recipient_keypairs.push(recipient_kp);
+    }
+
+    (
+        RoundFixture {
+            svm,
+            payer,
+            pool,
+            vault,
+            k_floor,
+            intents,
+            validator,
+        },
+        recipient_keypairs,
+    )
+}
+
+pub fn build_round_fixture_cached(k_floor: u16, n: usize) -> (RoundFixture, Vec<Keypair>) {
+    fixture_from_cache(cached_withdraw_materials(), k_floor, n, 0)
+}
+
+pub fn build_stake_round_fixture_cached(k_floor: u16, n: usize) -> (RoundFixture, Vec<Keypair>) {
+    fixture_from_cache(cached_stake_materials(), k_floor, n, 1)
+}
+
 /// Build a `commit_intent` transaction for intent `i` against round `round_id`.
 pub fn commit_intent_tx(fx: &RoundFixture, i: usize, round_id: u64) -> Transaction {
     let m = &fx.intents[i];
