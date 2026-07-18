@@ -1,44 +1,22 @@
 ---
 title: "Behavioral rounds — follow-up systems proposal (from k-candidates to k-anonymity)"
 date: 2026-07-16
-status: THINKING MATERIAL — a proposal for consideration; does NOT edit Plan 4, the spec, or shipped code
+status: early thinking material (2026-07-16) — superseded on specifics by crowd-depth-and-timing-mechanisms.md
 companion_to: behavioral-privacy-industry-practices.md
-method: 6 deepening research fronts (Sybil-pricing, anonymity harness, funding-topology, coordinator trust, disclosure, cross-round intersection), each fact-checked; cross-related with the code audit + research-1; adversarially critiqued for YAGNI / feasibility / bounty-fit
-caveat: >-
-  Produced by a parallel research pass while Plan 4 was in flight. Every item is an option, not a plan change.
-  ⚠️ READ THE ADVERSARIAL CRITIC REVIEW (near the end) BEFORE ACTING — it materially reprioritizes this proposal
-  (its sharpest point: build the second pooled ACTION, not a sixth privacy layer on the withdraw exit) and flags
-  real feasibility holes (on-chain distinct-funder counting is unenforceable; a "chunked atomic" executor is a
-  contradiction; the ~19-account ceiling is withdraw-only). Research agents could not open the repo under the
-  sandbox lock, so line-number claims should be reconfirmed against the tree before acting.
+method: 6 deepening research fronts (Sybil-pricing, anonymity harness, funding-topology, coordinator trust, disclosure, cross-round intersection), each fact-checked and adversarially critiqued for YAGNI / feasibility / bounty-fit
 ---
 
 # mirror-pool — Follow-up Systems Proposal: from *k-candidates* to *k-anonymity*
 
-> **Status: THINKING MATERIAL — a proposal for consideration.** It does **not** edit
-> Plan 4, the design spec, or shipped code. Every item is an option/recommendation.
->
-> **⚠️ RECONCILED against `main` @ `2882505` (2026-07-16) by a code-grounded verification pass.**
-> This doc was written *before* Plan 4 merged, blind to the repo (a macOS filesystem block), so its
-> code-grounding was a pre-merge snapshot. Corrections that supersede the body below:
-> - **Plan 4 is MERGED, not "in flight." Task 6 is DONE — the standalone `withdraw` instruction is
->   REMOVED** (gone from `lib.rs`; its test deleted; `build_withdraw_ix` gone from the SDK). Any line
->   below reading "withdraw still present / Task 6 not done / k=1 exit awaiting removal" is stale.
-> - The remaining single-note (sub-k) exit is **`cancel_intent`** — **permanent by design and explicitly
->   disclosed** (plan Self-Review + the `cancel_intent` doc comment + commit `1a78cd4`). It is a
->   documented safety-valve tradeoff to *mitigate* (e.g. timeout-gating), **not** a Task-6-style loose end.
-> - **Inline `lib.rs:NNN` line numbers are the pre-merge snapshot and have shifted** (the file is 549
->   lines now; e.g. `lib.rs:567` no longer exists). Current anchors: k-floor gate = `execute_round`'s
->   `meets_k_floor(count, k_floor)` (~`lib.rs:244`); `cancel_intent` (~`lib.rs:170`); `ExecuteRound`
->   accounts (~`lib.rs:464`); `deposit`'s `amount == denomination` is unchanged at `lib.rs:75`.
-> - **The anonymity-test mandate is spec §6 _item 5_, not "§6.5"** (the spec has no §6.5).
-> - **Everything substantive verified CORRECT** and thus load-bearing: the k-floor gates on raw
->   `intent_count` (not distinct funders) — whale-self-fill collapse is real; `cancel_intent` refunds the
->   full denomination with **zero** bond/forfeit; the `6 fixed + 3-per-intent` account shape ⇒ a **~19
->   intents/tx** ceiling; **k=2 = 26,247 CU** (re-measured live); no coordinator/harness crate exists;
->   single-denomination pool; and every spec citation. The core thesis ("k-floor buys k *candidates*, not
->   k-anonymity; withdraw-MVP is a mixer until effective-k is real") **holds against the merged code** —
->   only the "transitional / awaiting-Task-6" framing is wrong; the gap is the system's current, intentional state.
+> **Early proposal (2026-07-16) — kept for provenance, superseded on specifics.** This is the original
+> "how do we get from k-*candidates* to k-*anonymity*" proposal, written before Plan 4 merged; its inline
+> `lib.rs:NNN` line numbers and any "withdraw still present / Task 6 pending" framing are a **pre-merge
+> snapshot and are stale**. Its durable conclusions — the k-floor buys k *candidates* not k-anonymity,
+> whale self-fill is real, `cancel_intent` is a disclosed sub-k safety valve, the ~19-intent/tx ceiling —
+> are carried forward with current, code-grounded detail in
+> [`crowd-depth-and-timing-mechanisms.md`](crowd-depth-and-timing-mechanisms.md),
+> [`anonymity-frontier-and-antisybil.md`](anonymity-frontier-and-antisybil.md), and
+> [`solana-execution-limits.md`](solana-execution-limits.md). **Where they differ, the current docs govern.**
 
 ---
 

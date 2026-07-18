@@ -3,45 +3,25 @@ title: Behavioral-privacy industry best-practices → mirror-pool
 date: 2026-07-16
 status: research (informational — informs, does NOT change, the roadmap)
 scope: Best-in-class prior art (Ethereum · Cosmos · Solana) mapped onto mirror-pool's behavioral anonymity-set architecture and the Superteam Brazil bounty mission
-method: 6-front adversarial web research, each front independently fact-checked (workflow wr1o6a3wb); every cited system's maturity labelled honestly
-caveat: >-
-  Produced by a parallel research pass while Plan 4 (behavioral rounds) was in flight.
-  Findings are OPTIONS WITH TRADEOFFS, not plan changes. The research agents could not
-  open the repo source (macOS sandbox blocked ~/Documents), so relevance notes are grounded
-  in the architecture brief + CLAUDE.md, not a line-level code read — confirm exact on-chain
-  details against source before acting on anything here.
+method: 6-front adversarial web research, each front independently fact-checked; every cited system's maturity labelled honestly
 ---
 
 # Behavioral-privacy industry best-practices → mirror-pool
 
-> **⚠️ RECONCILED against `main` @ `2882505` (2026-07-16) by a code-grounded verification pass.**
-> This survey was written blind to the repo (a macOS filesystem block) while Plan 4 was in flight; its
-> repo-touching claims have now been verified against the merged code. Corrections that supersede the body:
-> - **Plan 4 is MERGED** — the round engine (`commit_intent` / `execute_round` / `cancel_intent`) is live and
->   the standalone `withdraw` instruction is REMOVED. Any "Plan 4 in flight" framing is stale.
-> - **Per-tx round ceiling — numbers corrected.** The real `ExecuteRound` uses **3 accounts per participant**
->   (`intent`, `recipient`, `relayer`) and has **no nullifier account** in `execute_round` (nullifiers settle
->   earlier, in `commit_intent`). So the ceiling is **~19 participants/tx** (not ~20-25) and **~95 under a
->   5-tx Jito bundle** (not ~100-125). And **Groth16 verification happens in `commit_intent`, once per
->   participant — NOT in `execute_round`** (whose per-participant work is just lamport transfers). The
->   "account-lock binds before CU" *conclusion* holds (more strongly); the reasoning attributing per-proof CU
->   to the batch instruction is wrong for our design.
-> - **No "summation of bucketed amounts."** The pool is **single-denomination**; each intent is paid
->   individually (`split_payout` per intent). ("Client-side proving" and "vault-as-sole-signer" are correct.)
-> - **Newly-surfaced gap (reinforces §6's own recommendation):** `commit_intent`'s `fee` is a free `u64`
->   (only `fee <= denomination`), so per-intent payout splits are **not yet byte-uniform** within a round —
->   "standardized action shapes" is a real, still-open TODO, not a shipped invariant.
-> - **Everything else code-touching verified CORRECT**: single-denomination pool, on-chain k-floor as a
->   *nominal* (not Sybil-priced) count, the Groth16/Anchor/`alt_bn128` stack, `TREE_HEIGHT=20`, no
->   coordinator/harness crate, and the `PooledAction` seam. The central thesis (effective-k, not nominal-k) holds.
+> **Early industry survey (2026-07-16).** Its durable findings — the uniform-actor advantage,
+> effective-k over nominal-k, the ~19-participant/tx Solana ceiling, and silent reward accrual — are
+> carried forward and refined in [`anonymity-frontier-and-antisybil.md`](anonymity-frontier-and-antisybil.md),
+> [`solana-execution-limits.md`](solana-execution-limits.md), and
+> [`crowd-depth-and-timing-mechanisms.md`](crowd-depth-and-timing-mechanisms.md). Where this early text and
+> those current docs differ, **the current docs govern** — in particular, the byte-uniform-fee gap this
+> survey flags as open is now **closed** (the pool-wide `fee` is enforced at `commit_intent` and both
+> `execute_round` arms). Read this doc for the industry landscape, not for exact on-chain details.
 
 ## Executive summary
 
 Across six fact-checked research fronts, the state of the art in on-chain privacy converges on one lesson that both validates and stress-tests mirror-pool: an anonymity set is only as strong as its weakest behavioural tell, so the number that matters is the effective anonymity set (entropy over the adversary's posterior), not the nominal head-count the on-chain k-floor enforces. mirror-pool's uniform-actor round is a genuine structural advance — one vault-signed batch (one signer, gas price, timestamp, wallet) neutralises the gas, address-reuse, FIFO-timing and wallet-fingerprint heuristics that deanonymise ~29-44% of Tornado Cash despite sound proofs, and it removes the addressable target Solana's validator-level copy-trade/front-run economy needs. Production precedent exists for the core mechanic (Penumbra's per-block batch DEX; CoW Protocol's uniform-clearing-price settle()), for silent reward accrual (Penumbra's exchange-rate model, the antidote to Tornado's deanonymizing anonymity-mining), and for token-free durable crowds (Privacy Pools) — but three of the most-cited "privacy" mechanisms are less mature than they look: Penumbra's per-contribution amount-hiding (flow encryption) is specced-not-shipped, Token-2022 confidential transfers have been disabled mainnet-wide since June 2025, and Arcium is permissioned mainnet-alpha. The single sharpest finding is that the k-floor as written is a liveness gate, not yet a privacy guarantee: a whale can satisfy k with k self-intents and collapse effective anonymity to 1, so the floor needs per-intent Sybil pricing and a notion of distinct funding sources, and the true guarantee must be measured off-chain by an adversarial harness reporting effective-k and per-participant Bayes vulnerability (<= 1/k). The residual attribution surface the uniform actor cannot fix is entirely pre-round (funding topology) and off-chain (coordinator-submission metadata), which production Sybil pipelines already exploit at scale. On Solana specifically the binding constraint is not cryptography but the per-transaction envelope (64 account locks bind before the 1.4M-CU / ~dozen-proof limit), capping a round at ~19 participants per tx (3 accounts/participant in the real `execute_round`) and ~95 under Jito's 5-tx atomicity, which forces a chunked, resumable, logically-atomic round executor modelled on SPL Stake Pool. For the deferred incentive module the research is unambiguous: pay silently via share appreciation realised at the existing spend, never via a public per-user duration/count reward. For behavioural (non-withdrawal) actions the bar is higher than any studied withdrawal mixer, because a stake/swap/vote carries shape entropy fixed denominations never had — making strict on-chain action-bucketing and a cross-round intersection test load-bearing. Net: the architecture is well-aligned with the bounty's "behavioural obscurity" mission and genuinely novel (no live system combines participant unlinkability + batch fairness + a multi-action layer), but the headline claim of defeating modern AI clustering is earned only once the k-floor is Sybil-priced, the harness certifies effective-k, and rewards/disclosure stay silent.
 
 This synthesis pulls six fact-checked research fronts into one decision-useful view for the mirror-pool team. It is written to inform — not change — the roadmap: every finding is framed as an option with tradeoffs, maturity is labelled honestly (production / mainnet-alpha / research / proposed / deprecated-or-defunct), and any claim a fact-checker marked OVERSTATED or UNVERIFIED is carried through as an explicit caveat, never asserted as fact. Citations are inline as primary-source URLs.
-
-*Environment note:* the local design spec and program source could not be opened here — macOS blocked filesystem access to the entire `~/Documents` tree ("Operation not permitted", confirmed across both working dirs). Relevance notes are therefore grounded in the architecture brief and CLAUDE.md conventions rather than a line-level read of the code. Where a note depends on an exact on-chain detail, that is flagged as needing confirmation against the source.
 
 ## 1. The load-bearing finding: the on-chain k-floor is a liveness gate, not yet a privacy guarantee
 

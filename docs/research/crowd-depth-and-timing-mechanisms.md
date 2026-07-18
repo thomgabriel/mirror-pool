@@ -12,8 +12,8 @@ method: >-
   anonymity-mining · timing/intersection mitigations), each fact-checked against primary sources
   read in full where marked VERIFIED and flagged otherwise, synthesised into a single decision doc.
   Every mechanism is tethered to a concrete mirror-pool seam — a PDA, a pure fn, the circuit, or the
-  CU/account-lock budget — read first-hand from the merged tree this session (invariants.rs, round.rs,
-  state.rs, lib.rs, nullifier.rs, action.rs, withdraw.circom). Code-grounded, not written blind.
+  CU/account-lock budget — read first-hand from the merged tree (invariants.rs, round.rs,
+  state.rs, lib.rs, nullifier.rs, action.rs, withdraw.circom).
 scope: >-
   For each deferred mechanism: does it deepen REAL (distinct-funder) k or only resist NOMINAL inflation,
   what does it cost against our budget, and BUILD / DEFER-AS-CITED-FUTURE-WORK / REJECT-AS-POOR-FIT. One
