@@ -8,18 +8,19 @@ use round_support::{
     DENOMINATION, FEE,
 };
 
+use pool_program::invariants::{MAX_K_STAKE, MAX_K_WITHDRAW, TIMEOUT_SLOTS};
 use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
 use solana_sdk::{
     account::{Account, ReadableAccount},
     address_lookup_table,
     compute_budget::ComputeBudgetInstruction,
-    instruction::{AccountMeta, Instruction},
+    instruction::{AccountMeta, Instruction, InstructionError},
     message::{v0, AddressLookupTableAccount, Message, VersionedMessage},
     pubkey::Pubkey,
     rent::Rent,
     signature::{Keypair, Signer},
     system_program,
-    transaction::{Transaction, VersionedTransaction},
+    transaction::{Transaction, TransactionError, VersionedTransaction},
 };
 
 // Stake tail ids (mirrors stake_round.rs's execute helper).
@@ -316,4 +317,140 @@ fn sweep_execute_round_ceiling() {
             }
         }
     }
+}
+
+/// The (MAX_K+1)-th commit must fail RoundFull — the fail-closed cap that
+/// keeps every round settleable by one transaction.
+#[test]
+fn commit_intent_rejects_round_past_max_k_withdraw() {
+    let n = MAX_K_WITHDRAW as usize + 1;
+    let (mut fx, _r) = build_round_fixture_cached(2, n);
+    commit_first(&mut fx, MAX_K_WITHDRAW as usize);
+    fx.svm.expire_blockhash();
+    let outcome = fx
+        .svm
+        .send_transaction(commit_intent_tx(&fx, MAX_K_WITHDRAW as usize, 0))
+        .expect_err("commit past MAX_K must fail");
+    assert!(matches!(
+        outcome.err,
+        TransactionError::InstructionError(_, InstructionError::Custom(_))
+    ));
+    // Anchor logs the variant name ("Error Code: RoundFull") — the idiom
+    // initialize_pool.rs already asserts with.
+    assert!(
+        outcome.meta.logs.iter().any(|l| l.contains("RoundFull")),
+        "expected RoundFull; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+#[test]
+fn commit_intent_rejects_round_past_max_k_stake() {
+    let n = MAX_K_STAKE as usize + 1;
+    let (mut fx, _r) = build_stake_round_fixture_cached(2, n);
+    commit_first(&mut fx, MAX_K_STAKE as usize);
+    fx.svm.expire_blockhash();
+    let outcome = fx
+        .svm
+        .send_transaction(commit_intent_tx(&fx, MAX_K_STAKE as usize, 0))
+        .expect_err("stake commit past MAX_K must fail");
+    assert!(
+        outcome.meta.logs.iter().any(|l| l.contains("RoundFull")),
+        "expected RoundFull; logs: {:?}",
+        outcome.meta.logs
+    );
+}
+
+/// The compute drift guard: a round at exactly MAX_K executes in one tx. If a
+/// future change makes execute_round heavier, this fails before production
+/// rounds can strand. Uses the v0+ALT path — at MAX_K_WITHDRAW a withdraw
+/// round's account count is past the legacy-Message panic threshold (see
+/// `sweep_execute_round_ceiling`'s doc comment), so the legacy execute helper
+/// cannot be used here at all.
+#[test]
+fn round_at_exactly_max_k_executes_withdraw() {
+    let k = MAX_K_WITHDRAW as usize;
+    let (mut fx, _r) = build_round_fixture_cached(2, k);
+    commit_first(&mut fx, k);
+    let cranker = Keypair::new();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
+    let vault_before = fx.svm.get_account(&fx.vault).unwrap().lamports();
+    let meta = execute_round0_v0(&mut fx, &cranker, k, false)
+        .expect("a MAX_K withdraw round must execute in one tx");
+    println!("withdraw k={k} CU={}", meta.compute_units_consumed);
+    let vault_after = fx.svm.get_account(&fx.vault).unwrap().lamports();
+    assert_eq!(vault_before - vault_after, DENOMINATION * k as u64);
+}
+
+#[test]
+fn round_at_exactly_max_k_executes_stake() {
+    let k = MAX_K_STAKE as usize;
+    let (mut fx, _r) = build_stake_round_fixture_cached(2, k);
+    commit_first(&mut fx, k);
+    let cranker = Keypair::new();
+    fx.svm.airdrop(&cranker.pubkey(), 1_000_000_000).unwrap();
+    let meta = execute_round0_v0(&mut fx, &cranker, k, true)
+        .expect("a MAX_K stake round must execute in one tx");
+    println!("stake k={k} CU={}", meta.compute_units_consumed);
+    for m in fx.intents.iter().take(k) {
+        let s = fx
+            .svm
+            .get_account(&stake_pda(fx.pool, m.intent_pda))
+            .unwrap();
+        assert_eq!(s.owner, stake::program::ID);
+    }
+}
+
+/// cancel_intent decrements intent_count, so a full round frees a slot: fill
+/// to MAX_K, cancel one (after the timeout), and the next commit succeeds.
+#[test]
+fn cancel_frees_a_slot_in_a_full_round() {
+    let n = MAX_K_WITHDRAW as usize + 1;
+    let (mut fx, recipients) = build_round_fixture_cached(2, n);
+    commit_first(&mut fx, MAX_K_WITHDRAW as usize);
+
+    // Warp past the cancel timeout, then cancel intent 0 (recipient signs).
+    let clock: solana_sdk::clock::Clock = fx.svm.get_sysvar();
+    fx.svm.warp_to_slot(clock.slot + TIMEOUT_SLOTS + 1);
+    let m0 = &fx.intents[0];
+    let (round, _) = Pubkey::find_program_address(
+        &[b"round", fx.pool.as_ref(), &0u64.to_le_bytes()],
+        &program_id(),
+    );
+    let mut data = round_support::disc("cancel_intent").to_vec();
+    data.extend_from_slice(&0u64.to_le_bytes());
+    data.extend_from_slice(&m0.nullifier_hash);
+    let cancel_ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new_readonly(fx.pool, false),
+            AccountMeta::new(round, false),
+            AccountMeta::new(m0.intent_pda, false),
+            AccountMeta::new(fx.vault, false),
+            AccountMeta::new(recipients[0].pubkey(), true),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data,
+    };
+    fx.svm.expire_blockhash();
+    let msg = Message::new(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+            cancel_ix,
+        ],
+        Some(&recipients[0].pubkey()),
+    );
+    fx.svm
+        .send_transaction(Transaction::new(
+            &[&recipients[0]],
+            msg,
+            fx.svm.latest_blockhash(),
+        ))
+        .expect("timed-out cancel must succeed");
+
+    // The freed slot accepts the (MAX_K+1)-th cached intent.
+    fx.svm.expire_blockhash();
+    fx.svm
+        .send_transaction(commit_intent_tx(&fx, MAX_K_WITHDRAW as usize, 0))
+        .expect("commit into the freed slot must succeed");
 }

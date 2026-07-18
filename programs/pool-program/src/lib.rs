@@ -36,10 +36,18 @@ pub mod pool_program {
         // Withdraw pools carry no validator and a fee ≤ denomination; stake pools name a validator and clear the delegation floor.
         match action_kind {
             0 => {
+                require!(
+                    k_floor <= crate::invariants::max_k(crate::round::ActionKind::Withdraw),
+                    PoolError::KFloorTooHigh
+                );
                 require!(validator == Pubkey::default(), PoolError::WrongActionConfig);
                 require!(fee <= denomination, PoolError::FeeExceedsDenomination);
             }
             1 => {
+                require!(
+                    k_floor <= crate::invariants::max_k(crate::round::ActionKind::Stake),
+                    PoolError::KFloorTooHigh
+                );
                 require!(validator != Pubkey::default(), PoolError::WrongActionConfig);
                 let stake_rent =
                     Rent::get()?.minimum_balance(crate::invariants::STAKE_ACCOUNT_SIZE);
@@ -150,6 +158,11 @@ pub mod pool_program {
             require!(fee == pool.fee, PoolError::FeeNotUniform);
             pool.action_kind
         };
+        let kind = match action_kind {
+            0 => crate::round::ActionKind::Withdraw,
+            1 => crate::round::ActionKind::Stake,
+            _ => return err!(PoolError::WrongActionConfig),
+        };
         require!(
             ctx.accounts.round.state == crate::round::RoundState::Open,
             PoolError::RoundClosed
@@ -174,11 +187,7 @@ pub mod pool_program {
         intent.recipient = ctx.accounts.recipient.key();
         intent.relayer = ctx.accounts.relayer.key();
         intent.fee = fee;
-        intent.action = match action_kind {
-            0 => crate::round::ActionKind::Withdraw,
-            1 => crate::round::ActionKind::Stake,
-            _ => return err!(PoolError::WrongActionConfig),
-        };
+        intent.action = kind;
         intent.committed_slot = Clock::get()?.slot;
 
         let round = &mut ctx.accounts.round;
@@ -186,6 +195,13 @@ pub mod pool_program {
             .intent_count
             .checked_add(1)
             .ok_or(error!(PoolError::RoundOverflow))?;
+        // MAX_K is the maximum EXECUTABLE count: past it, no single vault-signed
+        // transaction can settle the round and funds could exit only via the
+        // linkable cancel path — so the cap fails closed here, at commit.
+        require!(
+            round.intent_count <= crate::invariants::max_k(kind) as u32,
+            PoolError::RoundFull
+        );
         Ok(())
     }
 
@@ -690,4 +706,8 @@ pub enum PoolError {
     CancelTooEarly,
     #[msg("intent fee does not equal the pool's uniform fee")]
     FeeNotUniform,
+    #[msg("round already holds the maximum number of executable intents")]
+    RoundFull,
+    #[msg("k_floor exceeds the maximum executable round size")]
+    KFloorTooHigh,
 }
