@@ -10,8 +10,7 @@ companion_to:
 method: >-
   Three literature strands (anonymity METRICS · repeated-participation ATTACKS · ANTI-SYBIL / crowd-depth),
   each fact-checked with primary sources read in full where marked VERIFIED and flagged otherwise. Synthesised
-  against a first-hand read of the merged tree (invariants.rs, lib.rs, the design spec) — this doc is
-  code-grounded, not written blind.
+  against a first-hand read of the merged tree (invariants.rs, lib.rs, the design spec).
 scope: >-
   What effective-k means and which variant Plan 6b should compute; how anonymity decays under repeated
   participation and how to disclose it honestly; the anti-Sybil menu mapped to our round/PooledAction model
@@ -286,8 +285,8 @@ clustering/deanonymization-accuracy percentage exists** in their public material
 
 ### 2.4 Two citations in our own docs do not check out — correct them (do not quote as-is)
 
-Surfaced while verifying figures already in the tree. **This doc does not edit those files** (that
-is handled separately); it records the corrections the final design docs must apply:
+Surfaced while verifying figures already in the tree — the corrections, since applied to the spec
+and sibling docs:
 
 1. **"FIFO 34.7%" is sourced to a withdrawn preprint.** It appears at
    `docs/superpowers/specs/2026-07-15-mirror-pool-design.md:179` (threat-table row "Timing
@@ -463,7 +462,7 @@ record.
    decentralisation-for-its-own-sake — insurance against a specific, documented failure mode.
 4. **Do not rely on organic growth under thin/concentrated conditions.** Zcash's protocol-forced
    seeding is the cautionary twin of our whale-self-fill residual: of 2.24M transactions only 6,934
-   were fully shielded, and **founders + miners were ~66% of value drawn from the shielded pool**,
+   were fully shielded, and **founders + miners were 65.6% of value drawn from the shielded pool**,
    "significantly eroding the anonymity of other users" (Kappos *et al.*, USENIX Security 2018). **A
    seed that becomes a structurally distinctive, disproportionate share of the pool recreates this
    instead of solving cold-start.**
@@ -573,6 +572,169 @@ For the final design docs. "Where" is the doc/section the citation belongs in.
 
 ---
 
+## 6. Frontier-delta — the 2026-07-17 validation & up-to-date-methods pass
+
+A later pass re-verified every load-bearing citation above against primary text and scanned the
+current (2009–2026) frontier for methods the survey was missing. Two orchestrated research
+workflows (anonymity metrics/attacks/anti-Sybil; and Solana execution limits) proposed 40 candidate
+sources; an adversarial grounding gate fetched each and **rejected 4 as fabricated/inapplicable and
+demoted 14 to companion-only**, leaving exactly one new *grounding* citation. Results below preserve
+the `[VERIFIED]` / `[UNVERIFIED-PRIMARY]` / `WITHDRAWN` discipline; the five fabrication/attribution
+traps the pass caught are named in §6.9 so they are never re-introduced.
+
+### 6.1 The metric now has a named peer-reviewed anchor — Smith 2009 (QIF)
+
+`crates/effective-k`'s `effective_k = 1/max_funder_share` is **term-for-term** the reciprocal Bayes
+vulnerability of **Geoffrey Smith, "On the Foundations of Quantitative Information Flow," FoSSaCS
+2009** (`[VERIFIED]`, primary PDF read in full):
+
+- **Def 1:** `V(X) = maxₓ P[X=x]` (vulnerability = worst-case single-guess success);
+- **Def 2:** `H∞(X) = log 1/V(X)` (min-entropy); and *"if X is uniformly distributed among n values,
+  then V(X)=1/n and H∞(X)=log n."*
+
+So `effective_k = 1/V(X) = 2^{H∞}` is exactly Smith's measure, and it is **category-correct**: QIF is
+the noise-free, single-guess-adversary framework — precisely mirror-pool's threat model (guess
+which-of-`k`-identical-actions a funder initiated), with no DP/calibrated-noise assumption. This
+**upgrades** the crate's existing Cachin-1997 + Dodis–Reyzin–Smith-2007 grounding to the source that
+*defines* the measure (Cachin and DRS are downstream/parallel — Smith himself cites Tóth–Hornák–Vajda
+and Cachin on the same page). Backed by Alvim et al. 2020 (*The Science of QIF*) / the CSF 2012
+g-leakage paper (Prop. 3.1: the identity gain function reduces g-vulnerability to Bayes vulnerability
+`V = maxᵢ pᵢ`).
+
+**Honesty guards preserved.** `k∞ = k/m` and `Adv = (m−1)/k` remain **our labeled arithmetic
+instantiations** of Smith Def 1 (a dominant funder owning `m` of `k` notes ⇒ `maxᵢ pᵢ = m/k`), **not**
+literature-named theorems — no peer-reviewed source names a "`K_e = 2^{H∞}`" metric or proves a
+"`k/m` collapse." In particular, **do not** cite Smith's incidental "`m` guesses ⇒ success ≤ `m·V(X)`"
+bound for the `k/m` result: Smith's `m` is a *guess count*, ours is the *whale's note count* — the
+symbol collision is coincidental and would be a false citation.
+
+### 6.2 Why not differential privacy? (the answer we were missing)
+
+A literate judge will ask; the honest, citable boundary is **category mismatch, not gap.** DP (Dwork)
+and its metric/Bayesian generalizations — metric-DP / geo-indistinguishability
+(Andrés–Bordenabe–Chatzikokolakis–Palamidessi, CCS'13), Pufferfish (Kifer–Machanavajjhala, TODS 2014),
+computational-DP-lineage AnoA (Backes et al., CSF'13) — all bound how much a **randomized** mechanism's
+output shifts between two *adjacent* inputs, achieved by adding **calibrated noise**. Mirror-pool adds
+no noise and compares no adjacent inputs: its guarantee is that `k` identical vault-signed actions are
+indistinguishable **as a set** — a deterministic many-to-one collapse of `k` initiators onto one
+observed action, measured combinatorially via min-entropy. None of these is "the thing we forgot to
+add" — there is no randomized mechanism for them to bound. The one partial exception is **AnoA**, whose
+adjacency apparatus is abstract enough that a `k`-way assignment ambiguity could *in principle* be
+recast as an `(ε=0, δ=0)`-style claim — but AnoA's guarantee is still a computational distinguishing-game
+bound, no existing AnoA analysis covers our setting, and that recasting would be **our own future
+exercise, not an existing citation**. All four are **companion/contrast only**, never grounding.
+
+### 6.3 Legibility to a crypto-privacy reviewer
+
+Adopt "**effective anonymity set (size)**" as the crypto-legible label for `k∞` — explicitly a
+**naming choice, not a claim of prior formal equivalence**. The only crypto-domain paper with an actual
+anonymity-set-entropy *formula* is Tutela (App. A.2: uniform Shannon `H₁ = ln D` over uncompromised
+candidates) — the **special case** of our Rényi hierarchy at `H₁` under a no-whale (uniform) assumption;
+our `k∞ = 1/maxᵢ pᵢ` is Cachin's `H∞` rung, strictly stronger and robust to the whale-self-fill
+adversary `H₁` cannot represent. Zcash/Kappos and Tornado/Tutela's *primary* metric is a plain
+post-heuristic **count**, which maps to our on-chain **k-floor** (liveness), not to `k∞` — so **report
+both `k` and `k∞` side by side**, as `crates/effective-k` already does. Companions: Kappos 2018, Möser
+2018, Tutela 2022. **Do not** cite Vijayakumaran's Dulmage–Mendelsohn paper as a *metric* source (it is
+an attack), and **do not** invent a named Monero "effective ring size" metric — none exists; flag the
+absence.
+
+### 6.4 k-anonymity's 2025 standing *reinforces* us (one framing fix)
+
+The sharpest recent "k-anonymity is not enough" work (Domingo-Ferrer & Sánchez 2025; Chhillar et al.
+2025) attacks exactly the **naive nominal-`k`** posture mirror-pool already refuses: the k-floor is a
+liveness *count*; effective-`k` (min-entropy) is the guarantee. **Framing risk, not an architecture
+gap** — a skimming judge could read "k-floor" as a plain-k-anonymity claim. **Fix:** wherever `k-floor`
+appears judge-facing (README, spec), pair it immediately with the effective-`k` caveat.
+
+### 6.5 Batch-ordering side-channel — a real, open mechanism gap
+
+`execute_round` pays the batch in one vault-signed tx iterating **cranker-supplied** `remaining_accounts`
+in the order the cranker provides, with **no on-chain shuffle** (`committed_slot` is the only timing
+datum at commit). If that order tracks commit order — or the cranker simply picks it — batch **position
+re-links initiator → action after the crypto succeeds**. An off-chain "the cranker promises to shuffle"
+is **not** a guarantee (unenforceable, silently droppable); a SlotHashes/blockhash-seeded on-chain
+permutation is **also inadequate** — that source is **grindable** by exactly the party (cranker/leader)
+that controls order and timing. **Derived-by-us fix (label as such, like `k∞`/`Adv`):** `require!()`
+on-chain that `remaining_accounts` be **sorted by each intent's commitment/nullifier value** — fixed and
+hiding at commit, not chosen by the cranker — removing ordering discretion with no beacon/VRF (within
+YAGNI). Document as an open gap parallel to `6c`; see `solana-execution-limits.md` §4 for the *chunking*
+variant (worse — a further reason not to chunk). **Companion/contrast cites** (we apply *no* permutation,
+so these are contrast, not support): Furukawa–Sako (CRYPTO 2001), Neff (CCS 2001), Wadhwa et al. DIOPE
+(CCS 2024, why content/origin-independent on-chain ordering is hard against rational collusion).
+
+### 6.6 Shape uniformity — precedent solid, one real stake-path residual
+
+External precedent **validates** `require!(fee == pool.fee)` + fixed denomination: Tornado Cash
+(fixed-`N`-per-pool) and Privacy Pools (Buterin–Illum–Nadler–Schär–Soleimani, 2023/24: "same
+denomination is the default; arbitrary amounts need an extra SNARK"). The **withdraw** path is *not* a
+channel — fee/denomination are pool-uniform at commit (`lib.rs:150`) and both execute arms
+(`lib.rs:335/379`), so the CPI count is provably constant. **Real, previously-undocumented residual in
+the STAKE path:** `StakeAction::execute` branches on `self.stake_account.lamports()` (`action.rs:121`)
+— an empty stake PDA takes a 1-CPI create path, a **pre-funded** one (an attacker *can* pre-fund: the
+`nullifier_hash → intent_pda → stake_pda` derivation is public) takes a 2–3-CPI normalize path, and the
+per-intent vault debit differs — even though the delegated balance converges to exactly `to_stake`. The
+*amount* invariant holds, but the **inner-instruction trace and per-intent vault debit do not**; given
+no shuffle, a chain observer reading `getTransaction` innerInstructions can map trace-shape → intent
+position. **Fix:** identical CPI sequence regardless of starting balance, or coordinator pre-crank
+top-up to a known floor. Do **not** fold this into a "shape uniformity already solved" narrative.
+
+### 6.7 Empirical freshness (2023–2026)
+
+Our newest *verified* crypto-deanonymization source remains Wang WWW'23; no 2024–2026 result changes a
+number here. Companions to add, each scoped:
+
+- **RPC/network-timing** — Wang et al., "Time Tells All," arXiv:2508.21440 (2025): a **submission-layer**
+  surface (Solana >95% RPC coverage), *distinct* from our on-chain set-unlinkability — out-of-scope-but-real
+  caveat, no effective-`k` change.
+- **Railgun anonymity-loss** — arXiv:2606.25926 (2026): newest methodology but **category-inapplicable**
+  (shielded-balance mixer that hides *amounts*) — do not import its numbers.
+- **Solana network analysis** — Alizadeh & Khabbazian, EPJ Data Science 2025: explicitly *not* a privacy
+  study — environmental context that **confirms the Solana-specific deanonymization literature is a
+  genuine, citable gap**.
+- **Wallet-fingerprint** — Soleti et al., ACM SAC 2025: `[UNVERIFIED-PRIMARY]` (author page only; ACM
+  403) — motivates uniform-actor + byte-uniform fee, but drop the "~37% when split by pool" phrasing.
+
+### 6.8 Economic fee — the math *backs* "priced, not solved"
+
+No sound `Fee_min` makes whale self-fill net-negative, and this is now argued, not asserted.
+Deanonymizing one honest note by self-fill costs the whale exactly `(k−1)·pool.fee` (each intent
+enforces `fee == pool.fee`) — a **bounded, known** cost, further capped because `k ≤ ~17–19` (the tx
+account-lock limit, `solana-execution-limits.md` §1), so the *maximum possible* deterrent is only ~18×
+the per-action fee. The attacker's benefit `V` (private valuation of deanonymizing the target) is
+**unobservable and unbounded**; net-negative needs `Fee_min = V/(k−1)`, unsettable without bounding `V`.
+Worse, a byte-uniform fee taxes honest funders equally, so **raising it to deter shrinks the honest set
+and lowers `k`** — self-defeating. Backing (named in prose, **not** promoted to confident citations —
+they lacked grounding verdicts this pass): Douceur 2002 (impossibility without a central identity
+authority), Margolin–Levine 2008 (fee raises cost, never prevents), Xim/Bissias 2014 (`O(Y·τ)` — does
+**not** transfer; our cost is one-shot `(k−1)·fee`), Mazorra–Della Penna 2023 (reward-sharing, category
+mismatch). The externally-suggested "Economic Sybil Resistance in Cryptographic Pools" title is
+**unverifiable/likely nonexistent**; Anoma/Penumbra bonds are validator-consensus Sybil resistance
+(category mismatch). **Keep price-not-claim; do not overstate even the pricing benefit.**
+
+### 6.9 Corrections applied, and traps caught
+
+**Applied:**
+
+- **Kappos value-linkage `~66%` → `65.6%`** (primary §6.1/§6.3 = 52.1% + 13.5%; rounds to 66%, substance
+  unchanged — a submission cites the exact figure). Fixed in §3.5 above and Appendix #41.
+- **Rényi 1961 scope:** now read in full — it defines the general `Hα` family (eq. 1.21) and the `α→1`
+  Shannon limit (eq. 1.22), **not** the `α→∞` / min-entropy case. Attribute `H∞` to Smith 2009 / Cachin
+  1997 / DRS 2007, never to Rényi 1961 alone. (Appendix #8 refined.)
+
+**Traps the grounding gate caught — never re-introduce:**
+
+- **arXiv:2504.20296** (Mariani & Homoliak, a *real* mixing SoK) contains **none** of "Maximum Defender
+  Vulnerability", "Min-Entropy Anonymity Set Size", or "`K_e = 2^{H∞}`" — fabricated attribution
+  (full-text fetch). Usable at most as a landscape survey, never for our metric.
+- **Cristodaro et al. arXiv:2510.09433/09443** remain **`WITHDRAWN`** (a v2 exists but is *not* a
+  corrected version; there is currently *no* citable version) — "34.7% FIFO" stays uncited.
+- **"Circle Shuffle"** and a **Solana VRF-course** cite (proposed for the ordering fix) — unverifiable /
+  source does not state the grinding claim — rejected.
+- **Tutela authorship** is Wu, McTighe, Wang, Seres, Bax et al. (as Appendix #26 already has it) — an
+  externally-suggested "Quintyne-Collins / Pareto" credit is wrong and was not adopted.
+
+---
+
 ## Appendix — consolidated references with verification status
 
 **Metrics strand.**
@@ -583,7 +745,7 @@ For the final design docs. "Where" is the doc/section the citation belongs in.
 5. Sweeney (2002), "k-Anonymity," Int. J. Uncertainty, Fuzziness and Knowledge-Based Systems 10(5), pp. 557–570, DOI 10.1142/S0218488502001648 — `[VERIFIED]`.
 6. Machanavajjhala, Kifer, Gehrke & Venkitasubramaniam (2007), "ℓ-Diversity," ACM TKDD 1(1), Art. 3, DOI 10.1145/1217299.1217302 — `[VERIFIED]`.
 7. Li, Li & Venkatasubramanian (2007), "t-Closeness," IEEE ICDE 2007, pp. 106–115, DOI 10.1109/ICDE.2007.367856 — `[VERIFIED]`.
-8. Rényi (1961), "On Measures of Entropy and Information," Proc. 4th Berkeley Symp., Vol. 1, pp. 547–561 — `[UNVERIFIED-PRIMARY]` (via Cachin 1997).
+8. Rényi (1961), "On Measures of Entropy and Information," Proc. 4th Berkeley Symp., Vol. 1, pp. 547–561 — `[VERIFIED]` (primary read in full): defines the general `Hα` family (eq. 1.21) and the `α→1` Shannon limit (eq. 1.22) **only** — the `α→∞` / min-entropy case is *not* in Rényi 1961; attribute `H∞` to Smith 2009 / Cachin 1997 / DRS 2007 (see §6.9).
 9. Cachin (1997), "Entropy Measures and Unconditional Security in Cryptography," PhD Thesis, ETH Zürich No. 12187, https://cachin.com/cc/papers/d.pdf — `[VERIFIED]`.
 10. Dodis, Reyzin & Smith (2007), "Fuzzy Extractors" (survey; full version SIAM J. Comput. 38(1), pp. 97–139, 2008; orig. EUROCRYPT 2004), https://cs.nyu.edu/~dodis/ps/fuzzy-survey.pdf — `[VERIFIED]`.
 11. Massey (1994), "Guessing and Entropy," IEEE ISIT 1994, Trondheim, p. 204 — bibliographic corroborated; page `[UNVERIFIED-PRIMARY]`; inequality verified via #12.
@@ -623,3 +785,24 @@ For the final design docs. "Where" is the doc/section the citation belongs in.
 41. Kappos, Yousaf, Maller & Meiklejohn (2018), "An Empirical Analysis of Anonymity in Zcash," USENIX Security 2018, arXiv:1805.03180 — primary.
 42. Monero ring-size history, https://www.getmonero.org/resources/moneropedia/ring-size.html ; github.com/monero-project/monero/pull/8178 — primary.
 43. Maxwell (2013), "CoinJoin," bitcointalk.org/index.php?topic=279249.0 ; zkSNACKs coordinator discontinuation (2024), https://blog.wasabiwallet.io/zksnacks-is-discontinuing-its-coinjoin-coordination-service-1st-of-june/ — primary.
+
+**Frontier-delta references (2026-07-17 pass).** Grounding verdicts: `GROUND-AND-ADOPT` = usable as
+the metric's definitional grounding; `COMPANION` = related-work/contrast only, never grounding.
+
+44. Smith (2009), "On the Foundations of Quantitative Information Flow," FoSSaCS 2009, LNCS 5504, pp. 288–302, DOI 10.1007/978-3-642-00596-1_21 — `[VERIFIED]`, primary PDF read in full (Def 1 `V(X)=maxₓ P[X=x]`; Def 2 `H∞=log 1/V(X)`; uniform ⇒ `V=1/n`). **`GROUND-AND-ADOPT` — the definitional anchor for effective-k.**
+45. Alvim, Chatzikokolakis, McIver, Morgan, Palamidessi & Smith (2020), *The Science of Quantitative Information Flow*, Springer, ISBN 978-3-319-96129-3 — metadata verified, Ch. 2 behind auth wall; primary for the g-leakage equivalence is Alvim et al. (2012), "Measuring Information Leakage using Generalized Gain Functions," CSF 2012 (Prop. 3.1, `[VERIFIED]`). **`GROUND-AND-ADOPT` (QIF equivalence backing).**
+46. Andrés, Bordenabe, Chatzikokolakis & Palamidessi (2013), "Geo-Indistinguishability," ACM CCS 2013, arXiv:1212.1984 — `[VERIFIED]`. **`COMPANION`** (DP-boundary contrast).
+47. Kifer & Machanavajjhala (2014), "Pufferfish," ACM TODS 39(1), DOI 10.1145/2514689 — `[VERIFIED]`. **`COMPANION`** (DP-boundary contrast).
+48. Backes, Kate, Manoharan, Meiser & Mohammadi (2013), "AnoA," IEEE CSF 2013 — `[VERIFIED]`. **`COMPANION`** (DP-boundary contrast; the one abstract-enough framework, still a computational IND-CDP game).
+49. Möser et al. (2018), "An Empirical Analysis of Traceability in the Monero Blockchain," PoPETs 2018(3):143–163, DOI 10.1515/popets-2018-0025 — `[VERIFIED]`. **`COMPANION`** (crypto-domain legibility).
+50. Vijayakumaran (2021/2023), "Analysis of CryptoNote Transaction Graphs using the Dulmage–Mendelsohn Decomposition," IACR ePrint 2021/760 / AFT 2023 — `[VERIFIED]`. **`COMPANION`** — an *attack*, cited only as such (defines no anonymity-set metric).
+51. Wang et al. (2025), "Time Tells All: Deanonymization of Blockchain RPC Users with Zero Transaction Fee," arXiv:2508.21440 — `[VERIFIED]` (abstract). **`COMPANION`** (submission-layer/RPC-timing caveat).
+52. Huseynov, Shahzaib, Seres & Tapolcai (2026), "A Tattered Cloak of Invisibility: Measuring Anonymity Loss in Railgun on Ethereum," arXiv:2606.25926 — `[VERIFIED]` (abstract). **`COMPANION`** — category-inapplicable (hides amounts), do not import its numbers.
+53. Alizadeh & Khabbazian (2025), "Solana's transaction network: analysis, insights, and comparison," EPJ Data Science, DOI 10.1140/epjds/s13688-025-00561-x — `[VERIFIED]`. **`COMPANION`** (environmental context; confirms the Solana-deanon gap).
+54. Soleti, Gangwal & Conti (2025), "Attacking Anonymity Set in Tornado Cash via Wallet Fingerprints," ACM SAC 2025, DOI 10.1145/3672608.3707896 — `[UNVERIFIED-PRIMARY]` (author page only; ACM 403). **`COMPANION`**.
+55. Furukawa & Sako (2001), "An Efficient Scheme for Proving a Shuffle," CRYPTO 2001, LNCS 2139, pp. 368–387 — `[VERIFIED]`. **`COMPANION`** (verifiable-shuffle contrast — we apply *no* permutation).
+56. Neff (2001), "A Verifiable Secret Shuffle and its Application to E-Voting," ACM CCS 2001 — `[VERIFIED]`. **`COMPANION`** (verifiable-shuffle contrast).
+57. Wadhwa, Zanolini, D'Amato, Asgaonkar, Fang, Zhang & Nayak (2024), "Data Independent Order Policy Enforcement: Limitations and Solutions," ACM CCS 2024 / IACR ePrint 2023/868 — `[VERIFIED]`. **`COMPANION`** (on-chain-ordering-hardness contrast).
+58. Douceur (2002), "The Sybil Attack," IPTPS 2002; Margolin & Levine (2008), "Quantifying Resistance to the Sybil Attack," FC 2008 — economic-Sybil backing **named in prose (§6.8), not promoted to grounding this pass**.
+
+**REFUTED — do not cite for the stated purpose:** Mariani & Homoliak (2025), "SoK: A Survey of Mixing Techniques and Mixers for Cryptocurrencies," arXiv:2504.20296 — a *real* paper, but contains **none** of the min-entropy terms ("Maximum Defender Vulnerability" / "Min-Entropy Anonymity Set Size" / "`K_e = 2^{H∞}`") externally attributed to it (full-text fetch).
