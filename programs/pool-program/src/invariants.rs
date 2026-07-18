@@ -66,6 +66,42 @@ pub fn cancel_unlock_slot(committed_slot: u64) -> Result<u64> {
         .ok_or(error!(PoolError::CancelTooEarly))
 }
 
+/// Per-round intent caps: the executable-transaction envelope, enforced at
+/// commit_intent so a round can never grow past what ONE vault-signed
+/// execute_round transaction settles (past it, funds could exit only via the
+/// linkable cancel path). Measured 2026-07-18 (full sweep + logs in
+/// tests/max_k.rs's `sweep_execute_round_ceiling` and task-1-report.md):
+///
+/// - Withdraw: every k up to 21 executed with no failure of any kind (no
+///   64-account-lock enforcement observed, no compute-ceiling hit). The
+///   binding ceiling is therefore the plan's lock-arithmetic bound,
+///   ⌊(64-9)/3⌋ = 18 (conservative, counting the ALT table key). Shipped one
+///   below for cranker headroom: MAX_K_WITHDRAW = 17.
+/// - Stake: k=8..11 executed; k=12+ ALL failed with
+///   `InstructionError(_, ProgramFailedToComplete)` ("Program log: Error:
+///   memory allocation failed, out of memory") at roughly a quarter of the CU
+///   budget — the 32 KiB SBF bump-allocator heap, NOT compute or the account
+///   lock. Re-measured with `request_heap_frame(256 * 1024)`: identical
+///   failure at the same k — the default allocator is hard-capped regardless
+///   of the requested frame size, so this ceiling is NOT liftable by the
+///   cranker (only a custom global allocator could raise it — out of this
+///   plan's scope; noted as future work). The binding ceiling is the
+///   measured heap wall, 11, NOT the lock-arithmetic bound (16) or any
+///   compute limit. Shipped one below measured: MAX_K_STAKE = 10.
+///
+/// Re-measure if Solana's increase_tx_account_lock_limit feature (64->128)
+/// activates on mainnet (would only move withdraw's ceiling; stake's is
+/// heap-bound and independent of the lock limit).
+pub const MAX_K_WITHDRAW: u16 = 17;
+pub const MAX_K_STAKE: u16 = 10;
+
+pub fn max_k(kind: crate::round::ActionKind) -> u16 {
+    match kind {
+        crate::round::ActionKind::Withdraw => MAX_K_WITHDRAW,
+        crate::round::ActionKind::Stake => MAX_K_STAKE,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +155,30 @@ mod stake_tests {
     #[test]
     fn stake_split_rejects_fee_plus_rent_over_denomination() {
         assert!(stake_split(1_000, 900, 200).is_err());
+    }
+}
+
+#[cfg(test)]
+mod max_k_tests {
+    use super::*;
+    use crate::round::{ActionKind, MIN_K_FLOOR};
+
+    #[test]
+    fn max_k_selects_per_kind() {
+        assert_eq!(max_k(ActionKind::Withdraw), MAX_K_WITHDRAW);
+        assert_eq!(max_k(ActionKind::Stake), MAX_K_STAKE);
+    }
+
+    #[test]
+    fn max_k_bounds_are_sane() {
+        // A cap below the minimum floor would make every pool of that kind
+        // uninitializable; stake's 6-account tail means its cap can never
+        // exceed withdraw's. All-const inputs, so this is a compile-time
+        // check (clippy's `assertions_on_constants` otherwise fires on a
+        // runtime `assert!` here).
+        const { assert!(MAX_K_WITHDRAW >= MIN_K_FLOOR) };
+        const { assert!(MAX_K_STAKE >= MIN_K_FLOOR) };
+        const { assert!(MAX_K_STAKE <= MAX_K_WITHDRAW) };
     }
 }
 

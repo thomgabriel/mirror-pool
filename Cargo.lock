@@ -3995,6 +3995,7 @@ dependencies = [
  "prover",
  "sdk",
  "serde_json",
+ "solana-address-lookup-table-interface",
  "solana-poseidon",
  "solana-sdk",
  "solana-stake-interface",
