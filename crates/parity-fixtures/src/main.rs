@@ -1,3 +1,12 @@
+//! Golden-fixture generator for circuit↔chain hash parity.
+//!
+//! Emits the canonical Poseidon(1)/Poseidon(2), Merkle-root, and `extDataHash` values —
+//! computed with `pool-program`'s own `sol_poseidon`/`merkle` and `ext-data`, i.e. the exact
+//! implementations the on-chain program checks — which the circom parity tests
+//! (`circuits/test/*_parity`, `withdraw`) assert against. This is how "the circuit's hashing is
+//! byte-identical to what the chain recomputes" is kept true; any drift here would silently
+//! break every honest membership proof. Build/test tool — never deployed.
+
 use pool_program::merkle::{empty_root, insert, zeros, TREE_HEIGHT};
 use pool_program::poseidon::{hash1, hash2};
 
