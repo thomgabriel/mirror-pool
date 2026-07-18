@@ -26,7 +26,9 @@ A participant deposits into a Groth16 shielded pool, then acts through a two-pha
    transaction** executes *all* `k` identical actions in a single batch, dispatched through the
    `PooledAction` trait. Because the **vault** (a program PDA) signs every action, **no
    participant signature appears on any executed action** — that uniform actor is what makes the
-   initiators unlinkable. The `k`-floor is enforced *on-chain*: a round below the floor never fires.
+   initiators unlinkable. The `k`-floor is enforced *on-chain*: a round below the floor never fires —
+  though it is a liveness *count*, not the realized-anonymity guarantee (that is the entropy-based
+  **effective-k**, below).
 
 The one sanctioned extension seam is the **`PooledAction` trait** — adding a new action type is
 one adapter. Two are shipped: `Withdraw` and native-stake `Stake`.
@@ -58,12 +60,15 @@ Each non-obvious choice traces to a specific result in the literature:
   *size* overstates protection whenever the adversary's probability isn't uniform across it — the
   honest measure is the entropy of that posterior. So while the on-chain `k`-floor is a count, the
   anonymity mirror-pool *reports* is entropy-based.
-- **Use *min-entropy*, because the honest threat is a single-guess attacker.** Dodis, Reyzin & Smith
-  (2007) established that min-entropy's predictability `maxᵢ pᵢ` *is* the success probability of the
-  optimal single-guess adversary; and Tóth, Hornák & Vajda (PET 2004) built two distributions of
-  *identical Shannon entropy* where one leaks 5% and the other 50% — so Shannon and nominal `k` can
-  look healthy while real anonymity sits at the floor. That is why `crates/effective-k` reports
-  **min-entropy effective-k** (`k_∞ = 1 / maxᵢ pᵢ = k/m`), not a count.
+- **Use *min-entropy*, because the honest threat is a single-guess attacker.** The measure is Geoffrey
+  Smith's (*On the Foundations of Quantitative Information Flow*, FoSSaCS 2009): `effective-k = 1/V(X)
+  = 2^{H∞}`, where vulnerability `V(X) = maxᵢ pᵢ` *is* the optimal single-guess success — the noise-free,
+  single-guess framework this design lives in. Dodis, Reyzin & Smith (2007) frame the same
+  predictability; Tóth, Hornák & Vajda (PET 2004) built two distributions of *identical Shannon entropy*
+  where one leaks 5% and the other 50% — so Shannon and nominal `k` can look healthy while real
+  anonymity sits at the floor. That is why `crates/effective-k` reports **min-entropy effective-k**
+  (`k_∞ = 1 / maxᵢ pᵢ = k/m`), not a count. (`k/m` and the guessing advantage `(m−1)/k` are our labeled
+  arithmetic instantiations of Smith's definition, not literature-named terms.)
 - **A group of size `k` isn't protected when one member dominates it.** The k-anonymity →
   l-diversity → t-closeness line (Sweeney 2002; Machanavajjhala et al. 2007; Li et al. 2007) is
   exactly the finding that a `k`-sized group fails under a *homogeneity* attack — one value holding
@@ -93,6 +98,15 @@ Where the guarantee stops:
 - **The `k`-floor is a *liveness* gate, not a measure of realized anonymity.** One funder who
   self-fills `m` of the `k` notes ("whale self-fill") collapses the effective anonymity toward 1.
   `crates/effective-k` *measures* this residual (`k_∞ = k/m`); it does not remove it.
+- **The per-round anonymity set is bounded to ~17–19 by Solana itself.** `execute_round` settles the
+  whole round in one vault-signed transaction, so the 64-account-lock limit caps a round at ~17 (stake)
+  / ~19 (withdraw). This is a *size* ceiling independent of whale self-fill; a larger `k` would need
+  chunked execution we deliberately don't build (see `docs/research/solana-execution-limits.md`).
+- **Two residual mechanism gaps are documented, not hidden.** The batch's *execution order* is
+  cranker-supplied and not yet shuffled on-chain (a re-linking channel; an on-chain sort by
+  commitment/nullifier is the identified fix), and the stake path's create-vs-normalize branch leaves a
+  per-intent inner-instruction/vault-debit *shape* difference when a stake PDA is pre-funded. Both are
+  analyzed in `docs/research/` rather than narrated away.
 - **Crowd depth / Sybil resistance is the binding constraint** — and it is *priced, not solved*.
   A mandatory `fee` raises the *nominal* cost of self-fill; it does not deepen *distinct-human* `k`.
 - **`cancel_intent` is a single-note, non-batch exit** (a liveness safety-valve for a round that
