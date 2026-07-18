@@ -646,21 +646,32 @@ liveness *count*; effective-`k` (min-entropy) is the guarantee. **Framing risk, 
 gap** — a skimming judge could read "k-floor" as a plain-k-anonymity claim. **Fix:** wherever `k-floor`
 appears judge-facing (README, spec), pair it immediately with the effective-`k` caveat.
 
-### 6.5 Batch-ordering side-channel — a real, open mechanism gap
+### 6.5 Batch-ordering — examined, and it is **not** an anonymity gap
 
-`execute_round` pays the batch in one vault-signed tx iterating **cranker-supplied** `remaining_accounts`
-in the order the cranker provides, with **no on-chain shuffle** (`committed_slot` is the only timing
-datum at commit). If that order tracks commit order — or the cranker simply picks it — batch **position
-re-links initiator → action after the crypto succeeds**. An off-chain "the cranker promises to shuffle"
-is **not** a guarantee (unenforceable, silently droppable); a SlotHashes/blockhash-seeded on-chain
-permutation is **also inadequate** — that source is **grindable** by exactly the party (cranker/leader)
-that controls order and timing. **Derived-by-us fix (label as such, like `k∞`/`Adv`):** `require!()`
-on-chain that `remaining_accounts` be **sorted by each intent's commitment/nullifier value** — fixed and
-hiding at commit, not chosen by the cranker — removing ordering discretion with no beacon/VRF (within
-YAGNI). Document as an open gap parallel to `6c`; see `solana-execution-limits.md` §4 for the *chunking*
-variant (worse — a further reason not to chunk). **Companion/contrast cites** (we apply *no* permutation,
-so these are contrast, not support): Furukawa–Sako (CRYPTO 2001), Neff (CCS 2001), Wadhwa et al. DIOPE
-(CCS 2024, why content/origin-independent on-chain ordering is hard against rational collusion).
+`execute_round` pays the batch in one vault-signed tx iterating cranker-supplied `remaining_accounts`
+with no on-chain shuffle. It is tempting to call the batch **position** a re-linking channel
+(position → commit-time → initiator). **On rigorous spec review (2026-07-18) that does not hold — we
+retract the "open gap" framing an earlier draft of this section carried.** Three code facts:
+
+1. The recipient rides in the *same* `[intent, recipient, relayer]` triple as its intent in
+   `execute_round` (a `require_keys_eq!` binds them), so a sort only permutes position — the
+   recipient↔intent pairing is in the transaction **structure**, order-independent.
+2. `commit_intent` names the `recipient` in its own public transaction and stores
+   `(recipient, committed_slot)` in the Intent PDA, which `execute_round` **never closes** — so the
+   (commit-time → recipient → action) mapping is already public and permanent per intent, regardless
+   of execution order.
+3. The property actually protected is **funding-hiding** — the Groth16 membership proof hides *which
+   deposit* funds each intent — and batch position never bridges to it (the cranker cannot order by a
+   funding secret it never learns).
+
+So a canonical on-chain sort buys **no anonymity** here: every observer vantage is either already-public
+or orthogonal to funding-hiding. At most, sorting `remaining_accounts` by the intent-PDA key is an
+`O(n)` replacement for the current `O(n²)` `seen`-Vec duplicate check plus deterministic execution — a
+**cleanup, not a privacy mechanism** — and marginal at `k ≤ ~17`. Verifiable-shuffle primitives
+(Furukawa–Sako CRYPTO 2001; Neff CCS 2001) and on-chain-ordering-hardness results (Wadhwa et al. DIOPE,
+CCS 2024) are cited as *contrast*, but they would add nothing here either, because the leak they defend
+against is not private in this design. The residual that *is* real and stays disclosed is **cross-round
+commit-timing** (§6.7) — which no within-batch ordering touches.
 
 ### 6.6 Shape uniformity — precedent solid, one real stake-path residual
 

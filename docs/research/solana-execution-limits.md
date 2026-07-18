@@ -150,26 +150,19 @@ no shuffle), so "resume from index N" is meaningless. Instead:
 
 ---
 
-## 4. Cross-chunk / batch ordering (ties to the anonymity-frontier finding)
+## 4. Batch ordering — corrected (see `anonymity-frontier-and-antisybil.md` §6.5)
 
-The **single-tx** design adds **no new ordering side-channel**: intent order is already exactly
-`rem[i*3..]` as the cranker supplies it (`execute_round` reads it in that order; `commit_intent`
-records only `committed_slot`), so ordering already leaks 100% to the cranker by construction — see
-the anonymity-frontier doc's `batch-ordering-sidechannel` finding and its **derived-by-us** fix
-(sort `remaining_accounts` on-chain by each intent's commitment/nullifier value, fixed-and-hiding at
-commit, removing cranker discretion without a randomness beacon).
+The **single-tx** design has **no anonymity ordering leak**. An earlier draft here (and the
+anonymity-frontier doc) framed cranker-chosen execution order as a re-linking channel to be closed by an
+on-chain sort; a 2026-07-18 spec review **retracted that**: the recipient rides in the same
+`[intent, recipient, relayer]` triple as its intent, and `(recipient, committed_slot)` is already public
+in the never-closed Intent PDA, so batch position leaks nothing not already public and never bridges to
+the ZK-hidden funding linkage (full argument in `anonymity-frontier-and-antisybil.md` §6.5). A canonical
+sort is at most an `O(n)` duplicate-check + determinism **cleanup**, not a privacy mechanism.
 
-**Chunking, by contrast, *introduces* a leak.** Every chunk write-locks the same `pool`/`vault`/`round`
-PDAs, so Solana serializes them; which chunk lands in which slot/block-position is a function of the
-(public, ~2-days-ahead) leader schedule and of intra-block ordering — auction/tip-determined on
-Jito-majority mainnet, i.e. visible and biddable by the cranker or anyone racing it. That is a
-**chunk-granularity timing side-channel** correlating an output to a commit-time bucket. A
-SlotHashes/blockhash-seeded on-chain permutation does **not** fix it: SlotHashes is **leader-grindable**
-and the target leader is known days ahead, so a colluding/bribed leader can bias the permutation
-(VRF/commit-reveal would be needed, at real crypto/liveness cost). **Verdict:** if chunking is ever
-built, require all chunks for a round to land in the **same block** (or a strictly bounded,
-cranker-blind slot window) so chunk membership carries no more signal than round membership. The clean
-answer remains **never chunk**: keep the anonymity ceiling equal to the single-tx ceiling.
+**Chunking stays a non-goal (§3)** on its own merits — the per-writable-account-per-block CU cap (§5) and
+the added resumable-state-machine surface — *not* on an ordering-privacy argument. A SlotHashes-seeded
+shuffle would be leader-grindable regardless, but there is nothing here it needs to hide.
 
 ---
 

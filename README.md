@@ -103,11 +103,9 @@ Where the guarantee stops:
   whole round in one vault-signed transaction, so the 64-account-lock limit caps a round at ~17 (stake)
   / ~19 (withdraw). This is a *size* ceiling independent of whale self-fill; a larger `k` would need
   chunked execution we deliberately don't build (see `docs/research/solana-execution-limits.md`).
-- **Two residual mechanism gaps are documented, not hidden.** The batch's *execution order* is
-  cranker-supplied and not yet shuffled on-chain (a re-linking channel; an on-chain sort by
-  commitment/nullifier is the identified fix), and the stake path's create-vs-normalize branch leaves a
-  per-intent inner-instruction/vault-debit *shape* difference when a stake PDA is pre-funded. Both are
-  analyzed in `docs/research/` rather than narrated away.
+- **A residual mechanism gap is documented, not hidden.** The stake path's create-vs-normalize branch
+  leaves a per-intent inner-instruction / vault-debit *shape* difference when a stake PDA is pre-funded
+  (a chain-observable distinguisher) — analyzed in `docs/research/` rather than narrated away.
 - **Crowd depth / Sybil resistance is the binding constraint** — and it is *priced, not solved*.
   A mandatory `fee` raises the *nominal* cost of self-fill; it does not deepen *distinct-human* `k`.
 - **`cancel_intent` is a single-note, non-batch exit** (a liveness safety-valve for a round that
