@@ -47,8 +47,14 @@ read cheaper, nothing else.
 - `lib.rs`: `pub mod errors;` + `pub use errors::PoolError;` so every existing `crate::PoolError`
   / `PoolError::X` path (including `deposit.rs`-era hardcoded-code tests and all `require!` sites)
   resolves unchanged.
-- Guard: tests asserting variant names/codes (`RoundFull` 6023, `KFloorTooHigh` 6024,
-  `FeeNotUniform` 6022, "KFloorTooLow" log matches, …) pass **unchanged**.
+- Guard — **the existing tests are NOT sufficient for this piece** (fork finding, 2026-07-18):
+  nearly all error assertions are name-based log matches (`l.contains("RoundFull")`), which pass
+  even if a reorder shifts every numeric code; only 6001/6002 are pinned numerically anywhere. So
+  piece 2 **adds one host test** in `errors.rs` pinning the FULL ABI numerically — one
+  `assert_eq!(PoolError::<Variant> as u32, <index>)` per variant, all 25, `MerkleInit`=0 …
+  `KFloorTooHigh`=24 (Anchor code = 6000 + discriminant). Any reorder anywhere in the enum then
+  fails a test. This is the pass's sole sanctioned test addition (§5) — a guard, not behavior.
+- Existing name/code assertions still pass unchanged, as before.
 
 ### Piece 3 — `lib.rs` → `instructions/` (Squads-v4 one-file-per-instruction)
 - `programs/pool-program/src/instructions/{initialize_pool,deposit,commit_intent,cancel_intent,execute_round}.rs`
@@ -62,9 +68,13 @@ read cheaper, nothing else.
   stays importable. No new `events.rs` (one event ≠ a module).
 - The two load-bearing `execute_round` comment blocks move **verbatim**: the named-`'info`
   invariance rationale and the why-no-`round.state`-recheck constraint walk-through.
-- Guard: all per-instruction LiteSVM test binaries pass unchanged (they hit the real dispatch via
-  the .so, so delegation is exercised end-to-end); `anchor build` succeeds; discriminators
-  unchanged (tests compute them from fn names via `disc("name")` — green tests prove it).
+- **The load-bearing naming rule:** the `#[program]` fn names AND every `#[derive(Accounts)]` /
+  `#[account]` struct name stay **byte-identical** — instruction discriminators and the IDL derive
+  from these names. Move bodies; never rename. (Visibility/scope mistakes are compile-time-caught;
+  name drift is the silent one.)
+- Guard: all per-instruction LiteSVM test binaries pass unchanged (they build instruction data via
+  `disc("name")` — name → sha256 discriminator — and hit the real dispatch through the .so, so any
+  discriminator break fails them end-to-end); `anchor build` succeeds.
 
 ### Piece 4 — SDK split: `note.rs` / `tree.rs` / `ix.rs`
 - `crates/sdk/src/lib.rs` (725 lines) splits: `note.rs` (`Note` + note serialization),
@@ -106,12 +116,26 @@ test binaries' artifact paths).
 every `#[program]` fn name (ABI). When a sentence mixes both meanings, only the circuit/proof
 tokens change.
 
-**CRYPTO HARD-STOP:** the circuit *constraints* are untouched, so with the deterministic setup
-(pinned ptau + fixed beacon) `circuits/scripts/setup.sh` + `crates/vk-gen` must regenerate
-**byte-identical VK constants** — same bytes in `vk.rs`, only the const's *name* differing. The
-task must diff the regenerated VK bytes against the pre-rename ones; **any byte delta = STOP and
-report** (the rename leaked into circuit content). Then the full proof chain re-verifies: circom
-parity tests, `prover::prove_verify`, pool-program `verifier` test, SDK `e2e` real-proof rounds.
+**CRYPTO HARD-STOP — with a falsifiability check first (fork finding, 2026-07-18):**
+1. *Verify determinism before relying on byte-identity:* BEFORE any rename, run
+   `circuits/scripts/setup.sh` + `crates/vk-gen` twice on the unmodified circuit and byte-compare
+   the two `vk.rs` outputs (the generated VK constant bytes). If identical → determinism holds and
+   the byte-identity guard is meaningful.
+2. *If deterministic (expected — pinned sha256 ptau + fixed beacon):* after the rename, regenerate
+   and require the VK constant bytes **byte-identical** (only the const's name differs; on a pure
+   rename `git diff` of the VK bytes is empty). **Any byte delta = STOP and report** — the rename
+   leaked into circuit content.
+3. *If NOT deterministic:* the byte guard would false-positive on every run — fall back to the
+   honest *functional* guard: the regenerated VK must verify proofs end-to-end (parity tests,
+   `prover::prove_verify`, pool-program `verifier` test, SDK `e2e` real-proof rounds), and record
+   in the report that byte-identity was unavailable and why.
+Either way, the full proof chain re-verifies before the piece-5 commit lands.
+
+**Rename-completeness discipline — partition, don't pattern-match:** enumerate EVERY
+`withdraw`/`Withdraw` hit in the workspace (code, tests, circuits, scripts, package.json,
+fixtures) and categorize each as rename-XOR-keep with **zero left uncategorized**. A hit that fits
+neither "clearly circuit/proof" nor "clearly withdraw-action" is the stop condition — surface it
+to the orchestrator, don't guess. The plan carries the full partitioned inventory.
 
 **Why last and why now:** highest regression surface; and the soak (next work item) calls
 `prove_*`/proof types — landing this first means the soak is written once against final names.
@@ -124,8 +148,10 @@ Each piece's commit lands only with the full green gate of §2.
 ## 5. Non-goals
 
 No `[workspace.dependencies]` hoist (#2). No new abstractions, traits, or helper layers. No test
-additions or assertion changes. No `Pool`/`Round`/`Intent` layout or logic edits. No docs-prose
-pass (already done in `88c4260`); code-comment fixes limited to piece 1's stale-reference sweep.
+additions or assertion changes — with exactly ONE sanctioned exception: piece 2's numeric
+error-ABI pin test (mandated by the fork's guard-gap finding; the name-based assertions cannot
+catch a reorder). No `Pool`/`Round`/`Intent` layout or logic edits. No docs-prose pass (already
+done in `88c4260`); code-comment fixes limited to piece 1's stale-reference sweep.
 
 ## 6. Process
 
