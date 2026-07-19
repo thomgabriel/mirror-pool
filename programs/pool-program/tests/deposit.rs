@@ -20,7 +20,7 @@ use solana_sdk::{
 };
 
 /// Anchor custom program errors start at 6000, assigned in `PoolError` declaration order
-/// (see `programs/pool-program/src/lib.rs`): MerkleInit=6000, ZeroDeposit=6001,
+/// (see `programs/pool-program/src/errors.rs`): MerkleInit=6000, ZeroDeposit=6001,
 /// CommitmentNotInField=6002, TreeFull=6003. Confirmed against `target/idl/pool_program.json`.
 const ZERO_DEPOSIT_CODE: u32 = 6001;
 const COMMITMENT_NOT_IN_FIELD_CODE: u32 = 6002;

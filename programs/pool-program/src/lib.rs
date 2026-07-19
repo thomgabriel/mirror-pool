@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
 pub mod action;
+pub mod errors;
 pub mod invariants;
 pub mod merkle;
 pub mod nullifier;
@@ -11,6 +12,8 @@ pub mod round;
 pub mod state;
 pub mod verifier;
 pub mod vk;
+
+pub use errors::PoolError;
 
 use crate::merkle::{empty_root, zeros};
 use crate::state::Pool;
@@ -656,58 +659,4 @@ pub struct DepositEvent {
     pub commitment: [u8; 32],
     pub leaf_index: u32,
     pub new_root: [u8; 32],
-}
-
-#[error_code]
-pub enum PoolError {
-    #[msg("failed to initialize the merkle tree")]
-    MerkleInit,
-    #[msg("deposit amount must be greater than zero")]
-    ZeroDeposit,
-    #[msg("commitment is not a valid field element")]
-    CommitmentNotInField,
-    #[msg("merkle tree is full")]
-    TreeFull,
-    #[msg("proof bytes are malformed")]
-    ProofMalformed,
-    #[msg("proof failed verification")]
-    ProofInvalid,
-    #[msg("deposit amount must equal the pool's denomination")]
-    WrongDenomination,
-    #[msg("proof root is not a known recent root")]
-    UnknownRoot,
-    #[msg("fee must not exceed the pool's denomination")]
-    FeeExceedsDenomination,
-    #[msg("k_floor must be at least MIN_K_FLOOR")]
-    KFloorTooLow,
-    #[msg("round_id does not match the pool's current round")]
-    WrongRound,
-    #[msg("round is not open")]
-    RoundClosed,
-    #[msg("round intent count overflow")]
-    RoundOverflow,
-    #[msg("round has fewer intents than the k-floor")]
-    KFloorNotMet,
-    #[msg("wrong number of intent accounts for this round")]
-    IntentAccountsMismatch,
-    #[msg("intent account does not belong to this pool/round")]
-    IntentInvalid,
-    #[msg("payout account does not match the recorded intent")]
-    IntentAccountMismatch,
-    #[msg("duplicate intent account in the batch")]
-    DuplicateIntent,
-    #[msg("action_kind/validator/fee configuration is invalid for this pool")]
-    WrongActionConfig,
-    #[msg("stake pool denomination is too low to cover fee + rent + minimum delegation")]
-    StakeDenominationTooLow,
-    #[msg("account does not match the pool's configured stake action")]
-    StakeAccountInvalid,
-    #[msg("intent cannot be cancelled until its commit timeout has elapsed")]
-    CancelTooEarly,
-    #[msg("intent fee does not equal the pool's uniform fee")]
-    FeeNotUniform,
-    #[msg("round already holds the maximum number of executable intents")]
-    RoundFull,
-    #[msg("k_floor exceeds the maximum executable round size")]
-    KFloorTooHigh,
 }
