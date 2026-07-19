@@ -146,7 +146,7 @@ pub fn build_round_fixture(k_floor: u16, n: usize) -> RoundFixture {
     );
 
     // Build the client tree + deposit each commitment on-chain (roots agree by
-    // the MerkleTree<->pool_program parity proven in Task 1).
+    // the MerkleTree<->pool_program parity proven by the sdk parity tests).
     let notes: Vec<Note> = (0..n).map(|_| Note::new()).collect();
     let mut tree = MerkleTree::new().unwrap();
     for note in &notes {
@@ -288,7 +288,7 @@ pub fn build_round_fixture_signer_recipients(
     );
 
     // Build the client tree + deposit each commitment on-chain (roots agree by
-    // the MerkleTree<->pool_program parity proven in Task 1).
+    // the MerkleTree<->pool_program parity proven by the sdk parity tests).
     let notes: Vec<Note> = (0..n).map(|_| Note::new()).collect();
     let mut tree = MerkleTree::new().unwrap();
     for note in &notes {

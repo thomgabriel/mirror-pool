@@ -197,12 +197,16 @@ mod tests {
     use ark_ec::AffineRepr;
 
     fn g1_json(p: G1Affine) -> Value {
-        serde_json::json!([p.x().unwrap().to_string(), p.y().unwrap().to_string(), "1"])
+        serde_json::json!([
+            p.x().expect("affine point is not at infinity").to_string(),
+            p.y().expect("affine point is not at infinity").to_string(),
+            "1"
+        ])
     }
 
     fn g2_json(p: G2Affine) -> Value {
-        let x = p.x().unwrap();
-        let y = p.y().unwrap();
+        let x = p.x().expect("affine point is not at infinity");
+        let y = p.y().expect("affine point is not at infinity");
         serde_json::json!([
             [x.c0.to_string(), x.c1.to_string()],
             [y.c0.to_string(), y.c1.to_string()],
