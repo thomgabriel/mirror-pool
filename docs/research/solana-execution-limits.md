@@ -45,6 +45,17 @@ a round.** Everything below is that constraint made precise, plus the one-line c
 
 ## 1. The single-transaction account envelope → MAX_K
 
+> **MEASURED & SHIPPED (2026-07-18, `e9f9c68`) — supersedes the estimates in §1.1–§2 below.** A LiteSVM
+> sweep pinned the real ceilings and the fail-closed `MAX_K` cap is now built and merged
+> (`invariants::MAX_K_WITHDRAW = 17`, `MAX_K_STAKE = 10`; gates at `commit_intent` + `initialize_pool`).
+> **Headline correction: stake is *heap*-bound, not lock-bound.** Withdraw's ceiling *is* the 64-lock
+> arithmetic below (18 → ship 17). Stake's is **not** — it OOMs the program's 32 KB SBF bump allocator
+> at k=12 (ceiling 11 → ship 10), a resource the lock-only analysis below never modeled, and *not*
+> liftable by the cranker (`request_heap_frame` measured to change nothing; only a custom on-chain
+> allocator could — future work). So stake is the **weaker action on two axes**: smaller executable set
+> (10 vs 17) **and** more clusterable (§2). Evidence: `.superpowers/sdd/task-1-report.md`. The
+> lock-arithmetic analysis below is retained as the pre-measurement reasoning.
+
 `execute_round` passes, per participant, three accounts — withdraw `[intent, recipient, relayer]`,
 stake `[intent, stake_account, relayer]` — plus fixed context accounts, and for stake a 6-account
 shared tail (`lib.rs:296–357`). The binding limit is **not** compute at any bounty-relevant `k`; it is
@@ -55,7 +66,7 @@ Solana's **per-transaction account-lock ceiling**.
 | Pool / tx form | Fixed keys | Per-intent | Ceiling that binds | **MAX_K** |
 |---|---|---|---|---|
 | **Withdraw, v0 + ALT** | 7 (6 context + program id) | 3 | 64 account-locks | **≈ 19** (`7 + 3·19 = 64`) |
-| **Stake, v0 + ALT** | 13 (6 context + program id + 6-account stake tail) | 3 | 64 account-locks | **≈ 17** (`13 + 3·17 = 64`) — confirms `action.rs:80` |
+| **Stake, v0 + ALT** | 13 (6 context + program id + 6-account stake tail) | 3 | 64 account-locks | **≈ 17** *(estimate — **superseded**: measured **heap**-bound at 10, see note)* |
 | Withdraw, legacy (no ALT) | 7 | 3 | 1232-byte MTU (~35 keys) | ≈ 9 |
 | Stake, legacy (no ALT) | 13 | 3 | 1232-byte MTU (~35 keys) | ≈ 7 |
 
@@ -80,14 +91,19 @@ Three grounded facts behind the table:
    being lock-bound (17) rather than compute-bound near `k≈16` **must be measured**, not assumed.
    Two second-order account costs also erode the ceiling: a `ComputeBudget SetComputeUnitLimit`
    instruction (which the cranker *must* send, since the default 200k CU/instruction is exceeded past
-   ~`k=6` stake) adds the ComputeBudget program id as a key, dropping stake 17→**16**.
+   ~`k=6` stake) adds the ComputeBudget program id as a key, dropping the stake lock-estimate to ~16.
+   **MEASURED (see the note under §1's heading): this lock reasoning holds for withdraw but is WRONG
+   for stake — stake never reaches its lock ceiling; the 32 KB SBF heap OOMs it first at k=12
+   (ceiling 11 → ship 10).**
 
 ### 1.2 The honest headline
 
-**Our realized per-round anonymity set is bounded to the low tens (~17–19), not by our privacy
-design but by the Solana transaction envelope.** This is a material limitation and belongs in the
-threat model and README beside the whale-self-fill residual — the two are different axes (composition
-vs. size), and both cap the *effective* `k` below any nominal count.
+**Our realized per-round anonymity set is bounded to the low tens — withdraw ~17, stake ~10 (measured
+2026-07-18) — not by our privacy design but by the Solana transaction envelope.** This is a material
+limitation and belongs in the threat model and README beside the whale-self-fill residual. The two
+kinds bind on *different* limits (withdraw the account-lock ceiling, stake the 32 KB SBF heap), and
+stake is the weaker action on two axes at once — the smaller executable set **and** the more
+clusterable one (§2).
 
 ---
 
@@ -107,10 +123,12 @@ linkable** exit. So an unbounded round is a **liveness hole and an anonymity-deg
 once**, and an adversary can *induce* it by committing enough intents (cost: `N × denomination`
 locked, recoverable — a cheap griefing DoS that also forces everyone onto the linkable exit).
 
-**Fix (fail-closed, per CLAUDE.md) — tracked as a spawned implementation task:**
+**Fix (fail-closed, per CLAUDE.md) — BUILT & MERGED 2026-07-18 (`e9f9c68`); the as-shipped design:**
 
-1. `initialize_pool`: `require!(k_floor <= MAX_K)`.
-2. `commit_intent`: `require!(intent_count < MAX_K)` after the `checked_add`.
+1. `initialize_pool`: `require!(k_floor <= max_k(kind), KFloorTooHigh)`.
+2. `commit_intent`: `require!(intent_count <= max_k(kind), RoundFull)` after the `checked_add`
+   (`<=`, so `MAX_K` is the maximum *executable* count). Plus a compiled-tx ≤64-lock guard and the
+   LiteSVM exactly-at-`MAX_K` execution guard; consts pinned by measurement, not estimate.
 3. Make `MAX_K` **action-kind-aware** (stake cap < withdraw cap: the 6-account tail + ~5 CPIs/intent).
 4. **Pin `MAX_K` by a LiteSVM sweep**, not by this estimate — conservative starting points that sit
    safely under the 64-lock walls: withdraw ≈ 16, stake ≈ 13.
