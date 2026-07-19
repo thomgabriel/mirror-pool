@@ -352,9 +352,21 @@ If they differ, STOP, report NEEDS_CONTEXT with the hashes — the guard strateg
 
 - [ ] **Step 2: the partition inventory (STOP-on-ambiguous)**
 
-Run: `grep -rn -i "withdraw" --include="*.rs" --include="*.circom" --include="*.js" --include="*.sh" --include="*.json" --include="*.toml" --include="*.md" . | grep -v "target/\|node_modules\|circuits/build/\|Cargo.lock\|docs/superpowers\|docs/research\|.superpowers"`
+Run: `grep -rn -i "withdraw" --include="*.rs" --include="*.circom" --include="*.js" --include="*.sh" --include="*.json" --include="*.toml" --include="*.md" --include="*.yml" . | grep -v "target/\|node_modules\|circuits/build/\|Cargo.lock\|docs/superpowers\|.superpowers"`
+(note: `.yml` included and `docs/research` NOT excluded — fork spec-gate fold, 2026-07-19).
 Write EVERY hit to `.superpowers/sdd/withdraw-partition.md` as a table: file:line | token |
-RENAME or KEEP | one-word reason. Category rules (spec): RENAME = the 6 symbols + artifact
+RENAME or KEEP | one-word reason. Four hits are PRE-CATEGORIZED by the fork's spec gate and must
+appear in the table exactly so:
+- `.github/workflows/ci.yml` (~:155) step name "…+ withdraw membership/nullifier" → **RENAME**
+  (one word → "membership/nullifier"; CI invokes `npm test` with no filenames, so nothing else
+  changes).
+- `docs/research/crowd-depth-and-timing-mechanisms.md` — five `withdraw.circom` cites (incl.
+  line-cites) → **KEEP** (dated historical research record; spec's no-docs-prose rule).
+- `docs/research/behavioral-rounds-followup-proposal.md:356` — a Tornado Cash URL ending in
+  `withdraw.circom` → **KEEP — EXTERNAL LINK, MUST NOT CHANGE** (the exact trap a careless sweep
+  corrupts).
+- Any other `docs/research/` hit → KEEP as historical record unless it's a live wrong-path claim
+  about OUR tree post-rename; if you find one of those, STOP and surface it (don't decide alone). Category rules (spec): RENAME = the 6 symbols + artifact
 filenames/paths + wrong-after-move path prose (circuits/README.md legacy note + files table;
 prover/sdk doc comments citing `circuits/circom/withdraw.circom`). KEEP = `WithdrawAction`,
 `MAX_K_WITHDRAW`, `ActionKind::Withdraw`, `build_execute_round_ix`, **`withdrawer`** (native
@@ -382,7 +394,9 @@ uncategorized rows before proceeding.
    `withdraw.zkey` → `membership_js/membership.wasm`, `membership.r1cs`, `membership.zkey`).
 4. Path-prose: `circuits/README.md` (discharge the "still named withdraw… rename tracked" note —
    now describe `membership.circom` plainly — and the files table), prover/sdk doc comments citing
-   the .circom path.
+   the .circom path (`crates/prover/src/lib.rs:21`, `crates/sdk` — per the partition table), and
+   the one-word CI step name in `.github/workflows/ci.yml` ("withdraw membership/nullifier" →
+   "membership/nullifier").
 
 - [ ] **Step 4: regenerate + the VK hard-stop**
 
