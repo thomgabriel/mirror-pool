@@ -69,9 +69,13 @@ at HEAD — verify (`grep -n "round.rs" crates/sdk/src/lib.rs` returns nothing) 
 
 - [ ] **Step 2 (piece 1): vk-gen unwrap→expect**
 
-`crates/vk-gen/src/main.rs` lines ~30-32, 41-42: the bare `.unwrap()`s on JSON field access.
-Change each to `.expect("<what was missing>")` matching the message style of the file's existing
-`.expect()`s (lines ~29, 37, 39). No control-flow change — same panic, now with a message.
+`crates/vk-gen/src/main.rs` — the three bare `.unwrap()`s are at **line 200 and lines 204-205**
+(fork plan-gate correction: the earlier ~30-32/41-42 anchors already use `.expect`): they are
+arkworks affine-point coordinate accesses `p.x().unwrap()` / `p.y().unwrap()` inside the
+JSON-roundtrip helper (`x()`/`y()` return `Option`; `None` = point at infinity). Change each to
+`.expect("affine point is not at infinity")`-style messages matching the file's existing
+`.expect()` voice. No control-flow change — same panic, now with a message. Touch nothing that
+already uses `.expect`.
 
 - [ ] **Step 3: gate + commit piece 1**
 
@@ -310,6 +314,9 @@ build_cancel_intent_ix, round_pda, stake_account_pda}`.
 - `ix.rs`: everything else public-facing that remains: `WithdrawArtifacts`, `CommitIntentBuild`,
   all six `build_*_ix` fns, `round_pda`, `stake_account_pda`, the private `discriminator` helper
   and any other private helpers the builders use (~136-203, 286-524).
+- **Allocation is by ITEM NAME; the line ranges are approximate hints** (fork plan-gate note —
+  e.g. the `discriminator` helper sits at ~:127, inside note.rs's numeric range, but it is an
+  ix.rs item by name). When a range and a name disagree, the name wins.
 - `SdkError` STAYS in `lib.rs` (shared by note+tree; moving it to either would be arbitrary).
   The `pub use ext_data::… / pub use prover::…` re-export lines (~31-32) also stay in `lib.rs`.
 - The existing `#[cfg(test)]` module at the bottom of lib.rs (~526+): move it into the module
