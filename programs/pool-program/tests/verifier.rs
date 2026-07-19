@@ -1,10 +1,10 @@
-//! Exercises `pool_program::verifier::verify_withdraw` against a REAL Groth16
-//! proof generated in-test via `prover::prove_withdraw`, verified against the
-//! embedded `pool_program::vk::WITHDRAW_VK` — the same on-chain byte format
+//! Exercises `pool_program::verifier::verify_membership` against a REAL Groth16
+//! proof generated in-test via `prover::prove_membership`, verified against the
+//! embedded `pool_program::vk::MEMBERSHIP_VK` — the same on-chain byte format
 //! and VK the `withdraw` instruction (Task 3) will use.
 
-use pool_program::verifier::{verify_withdraw, WithdrawProof};
-use prover::{FieldBytes, WithdrawInputs, TREE_DEPTH};
+use pool_program::verifier::{verify_membership, MembershipProof};
+use prover::{FieldBytes, MembershipInputs, TREE_DEPTH};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -27,9 +27,9 @@ fn ensure_build_artifacts() -> PathBuf {
         .get_or_init(|| {
             let circuits_dir = workspace_root().join("circuits");
             let build_dir = circuits_dir.join("build");
-            let wasm = build_dir.join("withdraw_js").join("withdraw.wasm");
-            let r1cs = build_dir.join("withdraw.r1cs");
-            let zkey = build_dir.join("withdraw.zkey");
+            let wasm = build_dir.join("membership_js").join("membership.wasm");
+            let r1cs = build_dir.join("membership.r1cs");
+            let zkey = build_dir.join("membership.zkey");
             let vk = build_dir.join("verification_key.json");
             let required = [&wasm, &r1cs, &zkey, &vk];
 
@@ -63,7 +63,7 @@ fn decode_be_hex(s: &str) -> FieldBytes {
     out
 }
 
-fn load_bundle() -> WithdrawInputs {
+fn load_bundle() -> MembershipInputs {
     let path = workspace_root().join("circuits/test/withdraw_vectors.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
@@ -86,7 +86,7 @@ fn load_bundle() -> WithdrawInputs {
     assert_eq!(path_elements.len(), TREE_DEPTH);
     assert_eq!(path_indices.len(), TREE_DEPTH);
 
-    WithdrawInputs {
+    MembershipInputs {
         root: str_field("root"),
         nullifier_hash: str_field("nullifierHash"),
         ext_data_hash: str_field("extDataHash"),
@@ -102,15 +102,15 @@ fn real_proof_is_accepted_and_a_tampered_public_input_is_rejected() {
     let build_dir = ensure_build_artifacts();
     let bundle = load_bundle();
 
-    let (proof, public_inputs) = prover::prove_withdraw(
-        build_dir.join("withdraw_js").join("withdraw.wasm"),
-        build_dir.join("withdraw.r1cs"),
-        build_dir.join("withdraw.zkey"),
+    let (proof, public_inputs) = prover::prove_membership(
+        build_dir.join("membership_js").join("membership.wasm"),
+        build_dir.join("membership.r1cs"),
+        build_dir.join("membership.zkey"),
         &bundle,
     )
     .expect("proving the committed note bundle must succeed");
 
-    let withdraw_proof = WithdrawProof {
+    let withdraw_proof = MembershipProof {
         a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
         b: prover::g2_to_solana_be(&proof.b).unwrap(),
         c: prover::g1_to_solana_be(&proof.c).unwrap(),
@@ -121,12 +121,12 @@ fn real_proof_is_accepted_and_a_tampered_public_input_is_rejected() {
         public_inputs.ext_data_hash,
     ];
 
-    verify_withdraw(&withdraw_proof, &public_inputs_be)
+    verify_membership(&withdraw_proof, &public_inputs_be)
         .expect("a real proof for the committed bundle must verify against the embedded VK");
 
     let mut tampered = public_inputs_be;
     tampered[2][31] ^= 0x01; // flip a bit of extDataHash
-    let err = verify_withdraw(&withdraw_proof, &tampered)
+    let err = verify_membership(&withdraw_proof, &tampered)
         .expect_err("a proof must NOT verify against a tampered public extDataHash");
     assert!(
         err.to_string().contains("proof failed verification"),

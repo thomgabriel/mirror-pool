@@ -12,13 +12,13 @@
 //! - `compute_ext_data_hash` is a re-export of `ext_data::ext_data_hash`,
 //!   the one shared implementation `pool-program`'s `commit_intent` handler
 //!   also calls.
-//! - `build_commit_intent_ix` generates its proof via `prover::prove_withdraw`
+//! - `build_commit_intent_ix` generates its proof via `prover::prove_membership`
 //!   and formats it with `prover::proof_a_to_solana_be`/`g1_to_solana_be`/
 //!   `g2_to_solana_be` — the same encoding `pool-program`'s
 //!   `groth16-solana` verifier expects.
 
 pub use ext_data::ext_data_hash as compute_ext_data_hash;
-pub use prover::{FieldBytes, ProverError, PublicInputs, WithdrawInputs, TREE_DEPTH};
+pub use prover::{FieldBytes, MembershipInputs, ProverError, PublicInputs, TREE_DEPTH};
 
 /// Errors from fallible SDK constructors — never a panic path on
 /// attacker/untrusted-influenced input (e.g. a `Note` deserialized from

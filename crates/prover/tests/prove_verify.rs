@@ -1,4 +1,4 @@
-//! Load-bearing end-to-end test: prove the withdraw circuit from the
+//! Load-bearing end-to-end test: prove the membership circuit from the
 //! committed note bundle and verify the real proof both against
 //! `ark-groth16`/`verification_key.json` and (where feasible) the
 //! `groth16-solana` on-chain verifier byte format.
@@ -6,7 +6,7 @@
 use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_groth16::{Groth16, VerifyingKey};
 use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
-use prover::{FieldBytes, WithdrawInputs, TREE_DEPTH};
+use prover::{FieldBytes, MembershipInputs, TREE_DEPTH};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -36,9 +36,9 @@ fn ensure_build_artifacts() -> PathBuf {
         .get_or_init(|| {
             let circuits_dir = workspace_root().join("circuits");
             let build_dir = circuits_dir.join("build");
-            let wasm = build_dir.join("withdraw_js").join("withdraw.wasm");
-            let r1cs = build_dir.join("withdraw.r1cs");
-            let zkey = build_dir.join("withdraw.zkey");
+            let wasm = build_dir.join("membership_js").join("membership.wasm");
+            let r1cs = build_dir.join("membership.r1cs");
+            let zkey = build_dir.join("membership.zkey");
             let vk = build_dir.join("verification_key.json");
             let required = [&wasm, &r1cs, &zkey, &vk];
 
@@ -72,7 +72,7 @@ fn decode_be_hex(s: &str) -> FieldBytes {
     out
 }
 
-fn load_bundle() -> WithdrawInputs {
+fn load_bundle() -> MembershipInputs {
     let path = workspace_root().join("circuits/test/withdraw_vectors.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
@@ -95,7 +95,7 @@ fn load_bundle() -> WithdrawInputs {
     assert_eq!(path_elements.len(), TREE_DEPTH);
     assert_eq!(path_indices.len(), TREE_DEPTH);
 
-    WithdrawInputs {
+    MembershipInputs {
         root: str_field("root"),
         nullifier_hash: str_field("nullifierHash"),
         ext_data_hash: str_field("extDataHash"),
@@ -161,10 +161,10 @@ fn real_proof_verifies_and_rejects_a_tampered_public_input() {
     let build_dir = ensure_build_artifacts();
     let bundle = load_bundle();
 
-    let (proof, public_inputs) = prover::prove_withdraw(
-        build_dir.join("withdraw_js").join("withdraw.wasm"),
-        build_dir.join("withdraw.r1cs"),
-        build_dir.join("withdraw.zkey"),
+    let (proof, public_inputs) = prover::prove_membership(
+        build_dir.join("membership_js").join("membership.wasm"),
+        build_dir.join("membership.r1cs"),
+        build_dir.join("membership.zkey"),
         &bundle,
     )
     .expect("proving the committed note bundle must succeed");
@@ -217,10 +217,10 @@ fn real_proof_verifies_against_the_groth16_solana_on_chain_byte_format() {
     let build_dir = ensure_build_artifacts();
     let bundle = load_bundle();
 
-    let (proof, public_inputs) = prover::prove_withdraw(
-        build_dir.join("withdraw_js").join("withdraw.wasm"),
-        build_dir.join("withdraw.r1cs"),
-        build_dir.join("withdraw.zkey"),
+    let (proof, public_inputs) = prover::prove_membership(
+        build_dir.join("membership_js").join("membership.wasm"),
+        build_dir.join("membership.r1cs"),
+        build_dir.join("membership.zkey"),
         &bundle,
     )
     .expect("proving the committed note bundle must succeed");

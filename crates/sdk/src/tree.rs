@@ -15,7 +15,7 @@ pub struct MerklePath {
 /// (`TREE_HEIGHT` levels, Poseidon2 nodes, empty positions filled with the
 /// same zero-subtree constants). Lets a client compute its note's
 /// authentication path from the leaves it has scanned — the private
-/// `MerklePath` inputs `prover::prove_withdraw` needs.
+/// `MerklePath` inputs `prover::prove_membership` needs.
 pub struct MerkleTree {
     leaves: Vec<[u8; 32]>,
     zeros: [[u8; 32]; TREE_DEPTH],

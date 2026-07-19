@@ -7,7 +7,7 @@ use solana_sdk::{
     stake, system_program, sysvar,
 };
 
-use crate::{compute_ext_data_hash, MerklePath, Note, ProverError, PublicInputs, WithdrawInputs};
+use crate::{compute_ext_data_hash, MembershipInputs, MerklePath, Note, ProverError, PublicInputs};
 
 /// Anchor instruction discriminator = `sha256("global:<name>")[..8]`
 /// (matches `programs/pool-program/tests/common.rs::disc`).
@@ -86,12 +86,12 @@ pub fn build_deposit_ix(
     }
 }
 
-/// Filesystem paths to the compiled withdraw circuit artifacts
-/// (`circuits/build/withdraw_js/withdraw.wasm`, `circuits/build/withdraw.r1cs`,
-/// `circuits/build/withdraw.zkey` — see `circuits/scripts/setup.sh`),
-/// forwarded verbatim to `prover::prove_withdraw`.
+/// Filesystem paths to the compiled membership circuit artifacts
+/// (`circuits/build/membership_js/membership.wasm`, `circuits/build/membership.r1cs`,
+/// `circuits/build/membership.zkey` — see `circuits/scripts/setup.sh`),
+/// forwarded verbatim to `prover::prove_membership`.
 #[derive(Debug, Clone, Copy)]
-pub struct WithdrawArtifacts<'a> {
+pub struct MembershipArtifacts<'a> {
     pub wasm_path: &'a Path,
     pub r1cs_path: &'a Path,
     pub zkey_path: &'a Path,
@@ -118,10 +118,10 @@ pub fn build_commit_intent_ix(
     root: [u8; 32],
     fee: u64,
     round_id: u64,
-    artifacts: WithdrawArtifacts,
+    artifacts: MembershipArtifacts,
 ) -> Result<CommitIntentBuild, ProverError> {
     let ext_data_hash = compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), fee);
-    let inputs = WithdrawInputs {
+    let inputs = MembershipInputs {
         root,
         nullifier_hash: note.nullifier_hash(),
         ext_data_hash,
@@ -130,13 +130,13 @@ pub fn build_commit_intent_ix(
         path_elements: merkle_path.elements,
         path_indices: merkle_path.indices,
     };
-    let (proof, public_inputs) = prover::prove_withdraw(
+    let (proof, public_inputs) = prover::prove_membership(
         artifacts.wasm_path,
         artifacts.r1cs_path,
         artifacts.zkey_path,
         &inputs,
     )?;
-    let withdraw_proof = pool_program::verifier::WithdrawProof {
+    let withdraw_proof = pool_program::verifier::MembershipProof {
         a: prover::proof_a_to_solana_be(&proof.a)?,
         b: prover::g2_to_solana_be(&proof.b)?,
         c: prover::g1_to_solana_be(&proof.c)?,

@@ -1,4 +1,4 @@
-//! Rust proving harness for the withdraw circuit (`ark-circom` + `ark-groth16`).
+//! Rust proving harness for the membership circuit (`ark-circom` + `ark-groth16`).
 //!
 //! The public API is big-endian 32-byte throughout (matching the note bundle
 //! and the on-chain Poseidon/Merkle hashes); conversion to/from
@@ -18,17 +18,17 @@ use std::fs::File;
 use std::ops::Neg;
 use std::path::Path;
 
-/// Merkle tree depth of the withdraw circuit (`circuits/circom/withdraw.circom`).
+/// Merkle tree depth of the membership circuit (`circuits/circom/membership.circom`).
 pub const TREE_DEPTH: usize = 20;
 
 /// A big-endian 32-byte field element, as used throughout the note bundle
 /// and the on-chain hashes.
 pub type FieldBytes = [u8; 32];
 
-/// The withdraw circuit's named signals, decoded from the note bundle
+/// The membership circuit's named signals, decoded from the note bundle
 /// (`circuits/test/withdraw_vectors.json`).
 #[derive(Debug, Clone)]
-pub struct WithdrawInputs {
+pub struct MembershipInputs {
     pub root: FieldBytes,
     pub nullifier_hash: FieldBytes,
     pub ext_data_hash: FieldBytes,
@@ -122,21 +122,21 @@ fn fr_to_circom_bigint(bytes: &FieldBytes) -> BigInt {
     BigInt::from(biguint)
 }
 
-/// Generates a real Groth16 proof for the withdraw circuit.
+/// Generates a real Groth16 proof for the membership circuit.
 ///
-/// `wasm_path`/`r1cs_path` are `circuits/build/withdraw_js/withdraw.wasm` and
-/// `circuits/build/withdraw.r1cs`; `zkey_path` is `circuits/build/withdraw.zkey`.
+/// `wasm_path`/`r1cs_path` are `circuits/build/membership_js/membership.wasm` and
+/// `circuits/build/membership.r1cs`; `zkey_path` is `circuits/build/membership.zkey`.
 /// Returns the proof plus the public signals the witness actually computed
 /// (bound to `inputs.root`/`inputs.nullifier_hash` by the circuit's `===`
 /// constraints, so they match unless the witness itself was rejected;
 /// `inputs.ext_data_hash` is only squared, not constrained, so it always
 /// passes through unchanged — that's what lets it bind an arbitrary
 /// recipient/relayer/fee hash into the proof).
-pub fn prove_withdraw(
+pub fn prove_membership(
     wasm_path: impl AsRef<Path>,
     r1cs_path: impl AsRef<Path>,
     zkey_path: impl AsRef<Path>,
-    inputs: &WithdrawInputs,
+    inputs: &MembershipInputs,
 ) -> Result<(Proof<Bn254>, PublicInputs), ProverError> {
     // ark-circom's WASI witness environment (wasmer-wasix) reaches for a
     // running Tokio reactor even though building/witnessing here is

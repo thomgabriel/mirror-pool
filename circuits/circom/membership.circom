@@ -2,7 +2,7 @@ pragma circom 2.1.6;
 include "poseidon.circom";
 include "merkle_proof.circom";
 
-template Withdraw(depth) {
+template Membership(depth) {
     signal input root;                 // public
     signal input nullifierHash;        // public
     signal input extDataHash;          // public — binds recipient/relayer/fee (hash computed off-circuit)
@@ -28,4 +28,4 @@ template Withdraw(depth) {
     for (var i = 0; i < depth; i++) { mp.pathElements[i] <== pathElements[i]; mp.pathIndices[i] <== pathIndices[i]; }
     mp.root === root;
 }
-component main {public [root, nullifierHash, extDataHash]} = Withdraw(20);
+component main {public [root, nullifierHash, extDataHash]} = Membership(20);

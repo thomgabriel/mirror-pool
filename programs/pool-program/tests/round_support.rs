@@ -9,7 +9,7 @@ mod common;
 pub use common::{disc, program_id, so_path};
 
 use litesvm::LiteSVM;
-use pool_program::verifier::WithdrawProof;
+use pool_program::verifier::MembershipProof;
 use sdk::{MerkleTree, Note};
 use solana_sdk::{
     compute_budget::ComputeBudgetInstruction,
@@ -28,7 +28,7 @@ pub const FEE: u64 = 1_000;
 
 pub struct IntentMaterial {
     pub note: Note,
-    pub proof: WithdrawProof,
+    pub proof: MembershipProof,
     pub root: [u8; 32],
     pub nullifier_hash: [u8; 32],
     pub recipient: Pubkey,
@@ -68,9 +68,9 @@ fn ensure_build_artifacts() -> PathBuf {
             let circuits_dir = workspace_root().join("circuits");
             let build_dir = circuits_dir.join("build");
             let required = [
-                build_dir.join("withdraw_js").join("withdraw.wasm"),
-                build_dir.join("withdraw.r1cs"),
-                build_dir.join("withdraw.zkey"),
+                build_dir.join("membership_js").join("membership.wasm"),
+                build_dir.join("membership.r1cs"),
+                build_dir.join("membership.zkey"),
                 build_dir.join("verification_key.json"),
             ];
             if !required.iter().all(|p| p.exists()) {
@@ -179,7 +179,7 @@ pub fn build_round_fixture(k_floor: u16, n: usize) -> RoundFixture {
         let relayer = Pubkey::new_unique();
         let path = tree.authentication_path(i);
         let ext = sdk::compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), FEE);
-        let inputs = sdk::WithdrawInputs {
+        let inputs = sdk::MembershipInputs {
             root,
             nullifier_hash: note.nullifier_hash(),
             ext_data_hash: ext,
@@ -188,14 +188,14 @@ pub fn build_round_fixture(k_floor: u16, n: usize) -> RoundFixture {
             path_elements: path.elements,
             path_indices: path.indices,
         };
-        let (proof, public_inputs) = prover::prove_withdraw(
-            build_dir.join("withdraw_js").join("withdraw.wasm"),
-            build_dir.join("withdraw.r1cs"),
-            build_dir.join("withdraw.zkey"),
+        let (proof, public_inputs) = prover::prove_membership(
+            build_dir.join("membership_js").join("membership.wasm"),
+            build_dir.join("membership.r1cs"),
+            build_dir.join("membership.zkey"),
             &inputs,
         )
         .expect("proving a fresh note must succeed");
-        let withdraw_proof = WithdrawProof {
+        let withdraw_proof = MembershipProof {
             a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
             b: prover::g2_to_solana_be(&proof.b).unwrap(),
             c: prover::g1_to_solana_be(&proof.c).unwrap(),
@@ -324,7 +324,7 @@ pub fn build_round_fixture_signer_recipients(
         let relayer = Pubkey::new_unique();
         let path = tree.authentication_path(i);
         let ext = sdk::compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), FEE);
-        let inputs = sdk::WithdrawInputs {
+        let inputs = sdk::MembershipInputs {
             root,
             nullifier_hash: note.nullifier_hash(),
             ext_data_hash: ext,
@@ -333,14 +333,14 @@ pub fn build_round_fixture_signer_recipients(
             path_elements: path.elements,
             path_indices: path.indices,
         };
-        let (proof, public_inputs) = prover::prove_withdraw(
-            build_dir.join("withdraw_js").join("withdraw.wasm"),
-            build_dir.join("withdraw.r1cs"),
-            build_dir.join("withdraw.zkey"),
+        let (proof, public_inputs) = prover::prove_membership(
+            build_dir.join("membership_js").join("membership.wasm"),
+            build_dir.join("membership.r1cs"),
+            build_dir.join("membership.zkey"),
             &inputs,
         )
         .expect("proving a fresh note must succeed");
-        let withdraw_proof = WithdrawProof {
+        let withdraw_proof = MembershipProof {
             a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
             b: prover::g2_to_solana_be(&proof.b).unwrap(),
             c: prover::g1_to_solana_be(&proof.c).unwrap(),
@@ -543,7 +543,7 @@ pub fn build_stake_round_fixture(k_floor: u16, n: usize, stake_fee: u64) -> Roun
         let relayer = Pubkey::new_unique();
         let path = tree.authentication_path(i);
         let ext = sdk::compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), stake_fee);
-        let inputs = sdk::WithdrawInputs {
+        let inputs = sdk::MembershipInputs {
             root,
             nullifier_hash: note.nullifier_hash(),
             ext_data_hash: ext,
@@ -552,14 +552,14 @@ pub fn build_stake_round_fixture(k_floor: u16, n: usize, stake_fee: u64) -> Roun
             path_elements: path.elements,
             path_indices: path.indices,
         };
-        let (proof, public_inputs) = prover::prove_withdraw(
-            build_dir.join("withdraw_js").join("withdraw.wasm"),
-            build_dir.join("withdraw.r1cs"),
-            build_dir.join("withdraw.zkey"),
+        let (proof, public_inputs) = prover::prove_membership(
+            build_dir.join("membership_js").join("membership.wasm"),
+            build_dir.join("membership.r1cs"),
+            build_dir.join("membership.zkey"),
             &inputs,
         )
         .expect("proving a fresh note must succeed");
-        let withdraw_proof = WithdrawProof {
+        let withdraw_proof = MembershipProof {
             a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
             b: prover::g2_to_solana_be(&proof.b).unwrap(),
             c: prover::g1_to_solana_be(&proof.c).unwrap(),
@@ -693,7 +693,7 @@ pub fn build_stake_round_fixture_signer_recipients(
         let relayer = Pubkey::new_unique();
         let path = tree.authentication_path(i);
         let ext = sdk::compute_ext_data_hash(&recipient.to_bytes(), &relayer.to_bytes(), stake_fee);
-        let inputs = sdk::WithdrawInputs {
+        let inputs = sdk::MembershipInputs {
             root,
             nullifier_hash: note.nullifier_hash(),
             ext_data_hash: ext,
@@ -702,14 +702,14 @@ pub fn build_stake_round_fixture_signer_recipients(
             path_elements: path.elements,
             path_indices: path.indices,
         };
-        let (proof, public_inputs) = prover::prove_withdraw(
-            build_dir.join("withdraw_js").join("withdraw.wasm"),
-            build_dir.join("withdraw.r1cs"),
-            build_dir.join("withdraw.zkey"),
+        let (proof, public_inputs) = prover::prove_membership(
+            build_dir.join("membership_js").join("membership.wasm"),
+            build_dir.join("membership.r1cs"),
+            build_dir.join("membership.zkey"),
             &inputs,
         )
         .expect("proving a fresh note must succeed");
-        let withdraw_proof = WithdrawProof {
+        let withdraw_proof = MembershipProof {
             a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
             b: prover::g2_to_solana_be(&proof.b).unwrap(),
             c: prover::g1_to_solana_be(&proof.c).unwrap(),
@@ -772,7 +772,7 @@ pub const MAX_CACHED_INTENTS: usize = 21;
 /// extDataHash only). PDAs are derived per-fixture.
 pub struct CachedMaterial {
     pub note: Note,
-    pub proof: WithdrawProof,
+    pub proof: MembershipProof,
     pub root: [u8; 32],
     pub nullifier_hash: [u8; 32],
     pub recipient_keypair: [u8; 64],
@@ -800,7 +800,7 @@ fn generate_materials(fee: u64) -> Vec<CachedMaterial> {
                 &relayer.to_bytes(),
                 fee,
             );
-            let inputs = sdk::WithdrawInputs {
+            let inputs = sdk::MembershipInputs {
                 root,
                 nullifier_hash: note.nullifier_hash(),
                 ext_data_hash: ext,
@@ -809,16 +809,16 @@ fn generate_materials(fee: u64) -> Vec<CachedMaterial> {
                 path_elements: path.elements,
                 path_indices: path.indices,
             };
-            let (proof, public_inputs) = prover::prove_withdraw(
-                build_dir.join("withdraw_js").join("withdraw.wasm"),
-                build_dir.join("withdraw.r1cs"),
-                build_dir.join("withdraw.zkey"),
+            let (proof, public_inputs) = prover::prove_membership(
+                build_dir.join("membership_js").join("membership.wasm"),
+                build_dir.join("membership.r1cs"),
+                build_dir.join("membership.zkey"),
                 &inputs,
             )
             .expect("proving a cached note must succeed");
             CachedMaterial {
                 note: *note,
-                proof: WithdrawProof {
+                proof: MembershipProof {
                     a: prover::proof_a_to_solana_be(&proof.a).unwrap(),
                     b: prover::g2_to_solana_be(&proof.b).unwrap(),
                     c: prover::g1_to_solana_be(&proof.c).unwrap(),

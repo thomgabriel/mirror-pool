@@ -152,7 +152,7 @@ jobs:
       - uses: ./.github/actions/fetch-ptau
       - name: Regenerate verification_key.json
         run: bash circuits/scripts/setup.sh
-      - name: Circuit tests (Poseidon/Merkle parity vs on-chain + withdraw membership/nullifier)
+      - name: Circuit tests (Poseidon/Merkle parity vs on-chain + membership/nullifier)
         working-directory: circuits
         run: npm test
       - name: Byte-compare embedded VK against regenerated verification_key.json

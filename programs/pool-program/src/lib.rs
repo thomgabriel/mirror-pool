@@ -46,7 +46,7 @@ pub mod pool_program {
 
     pub fn commit_intent(
         ctx: Context<CommitIntent>,
-        proof: crate::verifier::WithdrawProof,
+        proof: crate::verifier::MembershipProof,
         root: [u8; 32],
         nullifier_hash: [u8; 32],
         fee: u64,

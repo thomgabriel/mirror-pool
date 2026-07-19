@@ -14,7 +14,7 @@
 use litesvm::LiteSVM;
 use sdk::{
     build_commit_intent_ix, build_deposit_ix, build_execute_round_ix, build_execute_stake_round_ix,
-    build_initialize_pool_ix, round_pda, stake_account_pda, MerkleTree, Note, WithdrawArtifacts,
+    build_initialize_pool_ix, round_pda, stake_account_pda, MembershipArtifacts, MerkleTree, Note,
 };
 use solana_sdk::{
     account::ReadableAccount,
@@ -64,9 +64,9 @@ fn ensure_build_artifacts() -> PathBuf {
         .get_or_init(|| {
             let circuits_dir = workspace_root().join("circuits");
             let build_dir = circuits_dir.join("build");
-            let wasm = build_dir.join("withdraw_js").join("withdraw.wasm");
-            let r1cs = build_dir.join("withdraw.r1cs");
-            let zkey = build_dir.join("withdraw.zkey");
+            let wasm = build_dir.join("membership_js").join("membership.wasm");
+            let r1cs = build_dir.join("membership.r1cs");
+            let zkey = build_dir.join("membership.zkey");
             let vk = build_dir.join("verification_key.json");
             let required = [&wasm, &r1cs, &zkey, &vk];
 
@@ -227,10 +227,10 @@ fn sdk_driven_round_trip_two_intents() {
             root,
             FEE,
             0,
-            WithdrawArtifacts {
-                wasm_path: &build_dir.join("withdraw_js").join("withdraw.wasm"),
-                r1cs_path: &build_dir.join("withdraw.r1cs"),
-                zkey_path: &build_dir.join("withdraw.zkey"),
+            MembershipArtifacts {
+                wasm_path: &build_dir.join("membership_js").join("membership.wasm"),
+                r1cs_path: &build_dir.join("membership.r1cs"),
+                zkey_path: &build_dir.join("membership.zkey"),
             },
         )
         .expect("proving a fresh SDK-generated note must succeed");
@@ -351,10 +351,10 @@ fn sdk_driven_stake_round() {
             root,
             stake_fee,
             0,
-            WithdrawArtifacts {
-                wasm_path: &build_dir.join("withdraw_js").join("withdraw.wasm"),
-                r1cs_path: &build_dir.join("withdraw.r1cs"),
-                zkey_path: &build_dir.join("withdraw.zkey"),
+            MembershipArtifacts {
+                wasm_path: &build_dir.join("membership_js").join("membership.wasm"),
+                r1cs_path: &build_dir.join("membership.r1cs"),
+                zkey_path: &build_dir.join("membership.zkey"),
             },
         )
         .expect("proving a fresh SDK-generated note must succeed");

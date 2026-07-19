@@ -5,7 +5,7 @@ use crate::PoolError;
 
 pub fn handler(
     ctx: Context<CommitIntent>,
-    proof: crate::verifier::WithdrawProof,
+    proof: crate::verifier::MembershipProof,
     root: [u8; 32],
     nullifier_hash: [u8; 32],
     fee: u64,
@@ -41,7 +41,7 @@ pub fn handler(
         &ctx.accounts.relayer.key().to_bytes(),
         fee,
     );
-    crate::verifier::verify_withdraw(&proof, &[root, nullifier_hash, ext])?;
+    crate::verifier::verify_membership(&proof, &[root, nullifier_hash, ext])?;
 
     // The nullifier PDA's `init` already enforced single-commit atomically.
     ctx.accounts.nullifier.spent = true;
@@ -71,7 +71,7 @@ pub fn handler(
 }
 
 #[derive(Accounts)]
-#[instruction(proof: crate::verifier::WithdrawProof, root: [u8; 32], nullifier_hash: [u8; 32], fee: u64, round_id: u64)]
+#[instruction(proof: crate::verifier::MembershipProof, root: [u8; 32], nullifier_hash: [u8; 32], fee: u64, round_id: u64)]
 pub struct CommitIntent<'info> {
     #[account(
         seeds = [b"pool", pool.load()?.mint.as_ref()],

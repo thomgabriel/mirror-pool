@@ -2,7 +2,7 @@ const { wasm } = require("circom_tester");
 const path = require("path"); const fs = require("fs");
 const { CIRCOMLIB, beHexToDec } = require("./util");
 
-describe("Withdraw circuit: Merkle membership + nullifier derivation", () => {
+describe("Membership circuit: Merkle membership + nullifier derivation", () => {
   const v = JSON.parse(fs.readFileSync(path.join(__dirname, "withdraw_vectors.json")));
   let circuit;
 
@@ -17,7 +17,7 @@ describe("Withdraw circuit: Merkle membership + nullifier derivation", () => {
   });
 
   before(async () => {
-    circuit = await wasm(path.join(__dirname, "../circom/withdraw.circom"), { include: CIRCOMLIB });
+    circuit = await wasm(path.join(__dirname, "../circom/membership.circom"), { include: CIRCOMLIB });
   });
 
   it("accepts the committed note bundle (commitment, nullifierHash, and root all bind)", async () => {

@@ -49,7 +49,7 @@ impl Note {
     /// `Poseidon2(nullifier, secret)` — matches
     /// `programs/pool-program/src/merkle.rs`'s deposited leaf and the
     /// circuit's `cm.inputs = [nullifier, secret]`
-    /// (`circuits/circom/withdraw.circom`).
+    /// (`circuits/circom/membership.circom`).
     pub fn commitment(&self) -> [u8; 32] {
         poseidon::hash2(&self.nullifier, &self.secret)
             .expect("Note fields are validated in-field by from_parts")
