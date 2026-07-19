@@ -19,6 +19,11 @@ read cheaper, nothing else.
 - **Full verification at every commit:** `cargo test --workspace` green with **unchanged test
   assertions** (a changed assertion means behavior moved — red flag), `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings`. Five pieces = five commits; never combined.
+- **SBF rebuild BEFORE the test run** on every piece touching `programs/pool-program/` (2, 3, 5):
+  the LiteSVM tests load a prebuilt `target/deploy/pool_program.so` that `cargo test` does NOT
+  rebuild — running the suite without `anchor build` first exercises the OLD binary and produces a
+  false green exactly where it matters (piece 3's dispatch, piece 5's embedded VK). The gate is:
+  `anchor build && cargo test --workspace` in that order (internal review F1, 2026-07-18).
 - Public surfaces frozen: error-code ABI (6000–6024), every `sdk::*` path, `declare_id!`, the VK
   bytes, all test files (except piece-5 symbol renames inside them and piece-1 comment fixes).
 
@@ -47,14 +52,21 @@ read cheaper, nothing else.
 - `lib.rs`: `pub mod errors;` + `pub use errors::PoolError;` so every existing `crate::PoolError`
   / `PoolError::X` path (including `deposit.rs`-era hardcoded-code tests and all `require!` sites)
   resolves unchanged.
-- Guard — **the existing tests are NOT sufficient for this piece** (fork finding, 2026-07-18):
-  nearly all error assertions are name-based log matches (`l.contains("RoundFull")`), which pass
-  even if a reorder shifts every numeric code; only 6001/6002 are pinned numerically anywhere. So
-  piece 2 **adds one host test** in `errors.rs` pinning the FULL ABI numerically — one
-  `assert_eq!(PoolError::<Variant> as u32, <index>)` per variant, all 25, `MerkleInit`=0 …
-  `KFloorTooHigh`=24 (Anchor code = 6000 + discriminant). Any reorder anywhere in the enum then
-  fails a test. This is the pass's sole sanctioned test addition (§5) — a guard, not behavior.
+- Guard — **the existing tests are NOT sufficient for this piece** (fork + internal review,
+  concurring, 2026-07-18): nearly all error assertions are name-based log matches
+  (`l.contains("RoundFull")`) or `Custom(_)` wildcards, which pass even if a reorder shifts every
+  numeric code (the `#[msg]`/name travels WITH the variant); only 6001/6002 are pinned numerically
+  anywhere (`deposit.rs:25-26`). Two guards, both required:
+  1. *Structural (move-verification):* byte-diff the extracted `enum PoolError { … }` body between
+     the old `lib.rs` and the new `errors.rs` — zero delta. Total and falsifiable for THIS move.
+  2. *Permanent (regression guard):* piece 2 **adds one host test** in `errors.rs` pinning the
+     FULL ABI numerically — `assert_eq!(PoolError::<Variant> as u32, <index>)` for all 25
+     variants, `MerkleInit`=0 … `KFloorTooHigh`=24 (Anchor code = 6000 + discriminant) — so any
+     FUTURE reorder also fails a test. The pass's sole sanctioned test addition (§5).
 - Existing name/code assertions still pass unchanged, as before.
+- The `deposit.rs:22-23` comment citing "see `programs/pool-program/src/lib.rs`" for the error
+  list may be repointed to `errors.rs` in this piece (sanctioned one-comment carve-out — §2's
+  freeze rule otherwise forbids test-file edits; internal review F6).
 
 ### Piece 3 — `lib.rs` → `instructions/` (Squads-v4 one-file-per-instruction)
 - `programs/pool-program/src/instructions/{initialize_pool,deposit,commit_intent,cancel_intent,execute_round}.rs`
@@ -72,6 +84,10 @@ read cheaper, nothing else.
   `#[account]` struct name stay **byte-identical** — instruction discriminators and the IDL derive
   from these names. Move bodies; never rename. (Visibility/scope mistakes are compile-time-caught;
   name drift is the silent one.)
+- Two mechanics the plan must carry verbatim (internal review): `lib.rs` `use`s the moved context
+  structs into the `#[program]` mod's scope (the macro needs the types resolvable), and the
+  `execute_round` delegating wrapper reproduces the full 4-lifetime signature
+  `Context<'_, '_, 'info, 'info, ExecuteRound<'info>>` exactly.
 - Guard: all per-instruction LiteSVM test binaries pass unchanged (they build instruction data via
   `disc("name")` — name → sha256 discriminator — and hit the real dispatch through the .so, so any
   discriminator break fails them end-to-end); `anchor build` succeeds.
@@ -106,30 +122,54 @@ The membership circuit is misnamed "withdraw" (it proves note membership for eve
 | `WithdrawArtifacts` | `MembershipArtifacts` |
 
 Cascade covers: `circuits/` (circom source, setup.sh, package.json scripts, JS tests),
-`crates/prover`, `crates/vk-gen`, `crates/sdk` (+ its tests), `programs/pool-program`
-(`verifier.rs`, `vk.rs`, handler call sites, `tests/{verifier,round_support}.rs` and the other
-test binaries' artifact paths).
+`crates/prover`, `crates/vk-gen` (**including** the codegen template at `main.rs:103` and its unit
+test asserting `pub const WITHDRAW_VK` — else `vk-gen --check` drift-fails for a non-crypto
+reason), `crates/sdk` (+ its tests), `programs/pool-program` (`verifier.rs`, `vk.rs`, handler call
+sites, `tests/{verifier,round_support}.rs` and the other test binaries' artifact paths), **and the
+path-reference prose that goes stale with the file move** (internal review F7):
+`circuits/README.md` (the legacy-name note — which this pass finally discharges — and the files
+table) plus the Rust doc comments citing `circuits/circom/withdraw.circom` by path
+(`crates/prover/src/lib.rs`, `crates/sdk`). Leaving those would re-create the exact wrong-file
+defect class piece 1 removes.
+
+**Shared fixture stays (internal review F3):** `circuits/test/withdraw_vectors.json` is consumed
+by BOTH the renamed circuit test AND `circuits/test/merkle_parity.test.js` (out of the cascade)
+plus the Rust fixture loaders. It is **deliberately NOT renamed** in this pass — the residual name
+is recorded here as intentional so neither implementer nor reviewer treats it as a miss. (Rename
+deferred; would touch parity files outside this cascade.)
 
 **DO-NOT-TOUCH list (the Withdraw *action* — one of two pooled actions — not the circuit):**
 `WithdrawAction` (`action.rs`), `MAX_K_WITHDRAW`, `ActionKind::Withdraw`, `build_execute_round_ix`,
 `PoolError` variants/messages, "withdraw pool"/"withdraw arm" prose in action-context comments, and
-every `#[program]` fn name (ABI). When a sentence mixes both meanings, only the circuit/proof
-tokens change.
+every `#[program]` fn name (ABI). Additionally (internal review F5 — real survivors a careless
+pass would corrupt): **`withdrawer`** — the native-stake *withdraw authority* field
+(`action.rs:70,186,189` sets `withdrawer: self.recipient` on a Solana stake-program struct;
+renaming breaks compile) and its test references; the withdraw-action test fn
+`tx_envelope.rs::withdraw_execute_round_at_max_k_fits_64_account_locks`; and local variables like
+`let withdraw_proof = …` in tests — these compile fine post-rename and are explicitly OUT of
+scope (leaving them is behavior-identical; "tidying" them is a drive-by). The rename set is the
+enumerated symbols + artifact paths + F7's path-prose ONLY; every other `withdraw*` token
+survives. When a sentence mixes both meanings, only the circuit/proof tokens change.
 
-**CRYPTO HARD-STOP — with a falsifiability check first (fork finding, 2026-07-18):**
-1. *Verify determinism before relying on byte-identity:* BEFORE any rename, run
-   `circuits/scripts/setup.sh` + `crates/vk-gen` twice on the unmodified circuit and byte-compare
-   the two `vk.rs` outputs (the generated VK constant bytes). If identical → determinism holds and
-   the byte-identity guard is meaningful.
-2. *If deterministic (expected — pinned sha256 ptau + fixed beacon):* after the rename, regenerate
-   and require the VK constant bytes **byte-identical** (only the const's name differs; on a pure
-   rename `git diff` of the VK bytes is empty). **Any byte delta = STOP and report** — the rename
-   leaked into circuit content.
-3. *If NOT deterministic:* the byte guard would false-positive on every run — fall back to the
-   honest *functional* guard: the regenerated VK must verify proofs end-to-end (parity tests,
-   `prover::prove_verify`, pool-program `verifier` test, SDK `e2e` real-proof rounds), and record
-   in the report that byte-identity was unavailable and why.
-Either way, the full proof chain re-verifies before the piece-5 commit lands.
+**CRYPTO HARD-STOP — primary guard is the committed file, regeneration is corroboration
+(fork finding + internal review F4, 2026-07-18):**
+1. *Primary, always-available, falsifiable:* `git diff` of `programs/pool-program/src/vk.rs`
+   against the **committed pre-rename file** must show **exactly one changed line — the const
+   name** (`WITHDRAW_VK` → `MEMBERSHIP_VK`); every hex byte line identical. This needs no
+   toolchain and cannot false-positive.
+2. *Corroboration — verify determinism first:* BEFORE the rename, run `circuits/scripts/setup.sh`
+   + `crates/vk-gen` twice on the unmodified circuit and byte-compare the outputs. Setup is
+   expected deterministic (sha256-pinned ptau, fixed beacon + iteration count — verified in
+   source); if the double-run confirms it, re-run after the rename and require the regenerated VK
+   bytes identical too. A byte delta here in a *mismatched toolchain* (wrong circom/snarkjs
+   version, missing ptau) is an environment artifact, NOT a rename leak — resolve the environment
+   before concluding anything; the committed-file diff (1) remains the ground truth.
+3. *If determinism unexpectedly fails:* fall back to the honest functional guard — the
+   regenerated VK must verify proofs end-to-end — and record why byte-identity was unavailable.
+**Any true VK byte delta in the committed file = STOP and report.** Either way, the full proof
+chain re-verifies before the piece-5 commit lands: circom parity tests, `prover::prove_verify`,
+pool-program `verifier` test, SDK `e2e` real-proof rounds — all against a freshly `anchor build`-t
+`.so` (§2).
 
 **Rename-completeness discipline — partition, don't pattern-match:** enumerate EVERY
 `withdraw`/`Withdraw` hit in the workspace (code, tests, circuits, scripts, package.json,
