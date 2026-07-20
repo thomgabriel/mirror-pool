@@ -33,9 +33,9 @@ fn ensure_build_artifacts() -> PathBuf {
         .get_or_init(|| {
             let circuits_dir = workspace_root().join("circuits");
             let build_dir = circuits_dir.join("build");
-            let wasm = build_dir.join("withdraw_js").join("withdraw.wasm");
-            let r1cs = build_dir.join("withdraw.r1cs");
-            let zkey = build_dir.join("withdraw.zkey");
+            let wasm = build_dir.join("membership_js").join("membership.wasm");
+            let r1cs = build_dir.join("membership.r1cs");
+            let zkey = build_dir.join("membership.zkey");
             let required = [&wasm, &r1cs, &zkey];
 
             if !required.iter().all(|p| p.exists()) {
@@ -155,10 +155,10 @@ fn commit_intent_ix_public_inputs_match_program_recomputation() {
     let fee = 1_000u64;
     let round_id = 0u64;
 
-    let artifacts = sdk::WithdrawArtifacts {
-        wasm_path: &build_dir.join("withdraw_js").join("withdraw.wasm"),
-        r1cs_path: &build_dir.join("withdraw.r1cs"),
-        zkey_path: &build_dir.join("withdraw.zkey"),
+    let artifacts = sdk::MembershipArtifacts {
+        wasm_path: &build_dir.join("membership_js").join("membership.wasm"),
+        r1cs_path: &build_dir.join("membership.r1cs"),
+        zkey_path: &build_dir.join("membership.zkey"),
     };
 
     let pool = Pubkey::new_unique();

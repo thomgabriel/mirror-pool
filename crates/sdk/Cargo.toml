@@ -14,7 +14,7 @@ pool-program = { path = "../../programs/pool-program" }
 # The single shared extDataHash implementation (also used by `pool-program`
 # and `crates/parity-fixtures`) — re-exported here, never re-derived.
 ext-data = { path = "../ext-data" }
-# Real Groth16 proof generation for `withdraw` + the on-chain Solana byte
+# Real Groth16 proof generation for `membership` + the on-chain Solana byte
 # encoding of the proof (`proof_a_to_solana_be`/`g1_to_solana_be`/`g2_to_solana_be`).
 prover = { path = "../prover" }
 solana-sdk = "~2.2"

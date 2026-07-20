@@ -38,7 +38,7 @@ pub struct Pool {
     pub k_floor: u16,
     _reserved2: [u8; 2],
     pub current_round_id: u64,
-    // Plan 5: a pool is ONE action kind (0 = Withdraw, 1 = Stake). Stored as u8
+    // A pool is ONE action kind (0 = Withdraw, 1 = Stake). Stored as u8
     // (not the `ActionKind` enum) because zero_copy `Pool` is bytemuck `Pod`.
     // `fee` (8-aligned at the current tail end 3936) then `validator`
     // ([u8;32], 1-aligned) then `action_kind` (u8) then an explicit trailing pad

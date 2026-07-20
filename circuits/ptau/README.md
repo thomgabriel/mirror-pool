@@ -1,7 +1,7 @@
 # Powers of tau (dev/CI only)
 
 `scripts/setup.sh` needs a Groth16 powers-of-tau file at `ptau/pot14_final.ptau`
-(2^14 = 16384 constraints — the withdraw circuit has 5313, so pot14 is ample).
+(2^14 = 16384 constraints — the membership circuit has 5313, so pot14 is ample).
 
 This is the **public Hermez ceremony** phase-1 output, truncated/prepared for
 2^14 constraints. It is a well-known, widely reused dev/CI artifact — **not**

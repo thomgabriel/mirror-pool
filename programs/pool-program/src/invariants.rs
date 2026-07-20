@@ -19,9 +19,9 @@ pub fn split_payout(denomination: u64, fee: u64) -> Result<(u64, u64)> {
 
 /// Stake account layout size (`StakeStateV2`) — used for the rent-exempt minimum
 /// and the `create_account`/`allocate` size. Kept as a plain const so this pure
-/// module stays syscall-free and host-testable; Task 2 adds a compile-time
+/// module stays syscall-free and host-testable; a compile-time
 /// `assert!(STAKE_ACCOUNT_SIZE == StakeStateV2::size_of())` in `action.rs` (where
-/// the stake crate is imported) so the two can never drift.
+/// the stake crate is imported) keeps the two from drifting.
 pub const STAKE_ACCOUNT_SIZE: usize = 200;
 
 /// The Stake program's minimum delegation (1 SOL on mainnet, verified via
