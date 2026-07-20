@@ -1,0 +1,16 @@
+[package]
+name = "soak"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+sdk = { path = "../sdk" }
+prover = { path = "../prover" }
+effective-k = { path = "../effective-k" }
+pool-program = { path = "../../programs/pool-program" }
+solana-client = "=2.2.1"
+solana-sdk = "=2.2.1"
+anchor-lang = "0.31.1"
+bincode = "1"
