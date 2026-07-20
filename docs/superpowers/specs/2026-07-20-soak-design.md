@@ -53,10 +53,14 @@ judge can look up by signature and re-derive every assertion from.
    any legacy message (44×32 > 1232 B). Its ALT includes the per-intent triples AND the shared
    6-account tail `[validator, stake_program, stake_config, clock, stake_history, rent]` (all
    readonly non-signers, ALT-eligible), same chunked-extend + last-slot-activation rules. Uses
-   `build_execute_stake_round_ix`; asserts each of the 10 stake accounts is Stake-program-owned,
-   initialized with `staker = recipient` and `withdrawer = recipient`, and **delegated** to the
-   run's vote account. Delegation *activation* (an epoch process) is deliberately not awaited —
-   the honest claim is the delegation state, and the report says so.
+   `build_execute_stake_round_ix`; asserts each of the 10 stake accounts is Stake-program-owned
+   and that its **final `Authorized` state (read via `getAccountInfo` post-execute) is
+   `staker = recipient`, `withdrawer = recipient`** — the account is *initialized* vault-side
+   (`staker = VAULT`, since the vault must sign `DelegateStake`) and handed over via
+   `Authorize(Staker)` inside the same transaction (fork spec-gate fold: assert the final state,
+   never the Initialize step's parameters) — and **delegated** to the run's vote account.
+   Delegation *activation* (an epoch process) is deliberately not awaited — the honest claim is
+   the delegation state, and the report says so.
 
 **Blockhash discipline (binding):** a recent blockhash is fetched immediately before **each**
 transaction send (or per small batch) — never before the multi-minute proof phase; a blockhash
