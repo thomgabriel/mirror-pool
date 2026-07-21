@@ -71,9 +71,19 @@ exposed action type — is driven by the precondition regime + a plausibly small
 destination universe `N` (validators receiving pool delegations, hundreds not millions), NOT by
 `t*` magnitude** (spec-review F1). `t*` is *decreasing* in `N`, so ranking action exposure by
 `t*` would give the opposite, wrong headline — the harness must NOT rank exposure by `t*`. The
-honest asymmetry is: for stake, `m < N/(b−1)` is satisfiable with a plausibly-tiny `m` against a
-small `N`, so the attack both *applies* and targets a small set; for withdraw, large `N` makes
-the precondition harder to satisfy and the target set diffuse.
+honest asymmetry is **behavioral, on the `m` side — forced-vs-permitted, NOT a claim about `N`**
+(spec-review, fork gate; checked against eq. 4 `m < N/(b−1)`, whose right side *grows* with `N`,
+so large `N` makes the precondition *easier* to satisfy for any fixed `m`, never harder):
+- **Stake *forces* the vulnerable shape.** The ~1-epoch stake-deactivation cooldown pins `m ≈ 1`
+  — a fixed, stable target — against a small, enumerable `N` (validators receiving pool
+  delegations). The Alice model applies structurally, and the identified edge (funder → validator)
+  is concrete. This is structural exposure.
+- **Withdraw merely *permits* it.** A user who reuses a fixed small recipient set is fully
+  attackable at large `N` too — the precondition is trivially satisfied there and convergence is
+  *faster*. Withdraw's protection is that fresh-recipient rotation is available and costless, so
+  the destination set grows with participation and voids the fixed-small-`m` model. That is
+  **user-behavior-conditional safety, not structural safety** — the stronger, more honest
+  disclosure. (§3.3 inherits this framing.)
 
 ## 3. Output — the proof artifact
 
@@ -89,8 +99,11 @@ real). Doc structure, degradation-first (F5):
    across `m = k … 1`, i.e. **worst case first**; the collapsing number is the first column a
    reader meets, not a footnote.
 3. *The R3 decay* — the precondition `m<N/(b−1)`, `t*` (m≥2 regime; "applies immediately" for
-   m=1), the seeded cross-check's seed-distribution agreement, and the per-action asymmetry framed
-   per R2 above (precondition + m≈1 + small N — NOT a `t*` ranking).
+   m=1), the seeded cross-check's seed-distribution agreement, and the per-action asymmetry as the
+   **forced-vs-permitted** framing above (stake *forces* `m≈1` against small `N` = structural
+   exposure; withdraw *permits* it but rotation gives user-behavior-conditional safety) — NOT a
+   `t*` ranking, and NOT any claim that large `N` shields the precondition (eq. 4: large `N` makes
+   it easier to satisfy).
 4. *What this measures, and what it does NOT establish* — at equal prominence: it's a model over
    synthetic compositions; **real funder-clustering is an assumed adversary *capability*, an input
    to the harness — grounded, not fantastical: public-chain clustering is empirically demonstrated
