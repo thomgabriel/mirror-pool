@@ -105,10 +105,15 @@ fn run(ctx: &Ctx, report_path: &Path) -> SoakResult<()> {
         setup.stake_denomination,
     ));
 
-    ctx.report.note(
-        "rounds: not yet implemented (Task 1 scope only — the withdraw and stake rounds land in \
-         Tasks 2-3)",
+    let withdraw_start = Instant::now();
+    phases::withdraw_round::run(ctx, &setup)?;
+    ctx.report.phase_timing(
+        "withdraw round (k = MAX_K_WITHDRAW)",
+        withdraw_start.elapsed(),
     );
+
+    ctx.report
+        .note("stake round: not yet implemented (Task 2 scope only — lands in Task 3)");
 
     ctx.report
         .finish(report_path)

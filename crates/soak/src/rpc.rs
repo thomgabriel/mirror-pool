@@ -148,10 +148,15 @@ pub fn create_and_fill_alt(
 fn create_alt_table(ctx: &Ctx, authority: Pubkey, payer: Pubkey) -> SoakResult<Pubkey> {
     let mut retried = false;
     loop {
-        let recent_slot = ctx
+        let current_slot = ctx
             .client
             .get_slot()
             .map_err(|e| SoakError::new(format!("alt create: get_slot: {e}")))?;
+        // The on-chain check is `slot_hashes.get(&recent_slot).is_some()` — only slots
+        // strictly BEFORE the executing bank's own slot have a hash recorded. A fast
+        // single-node localnet can land this transaction in the very slot `get_slot()`
+        // just returned, so the current slot itself is not yet a valid `recent_slot`.
+        let recent_slot = current_slot.saturating_sub(1);
         let (ix, table_key) = create_lookup_table(authority, payer, recent_slot);
         match send_ixs(ctx, "alt: create_lookup_table", &[ix], &[&ctx.operator]) {
             Ok(_) => return Ok(table_key),

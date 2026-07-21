@@ -15,8 +15,19 @@ use solana_sdk::{
 
 use crate::rpc::{send_ixs, Ctx, SoakError, SoakResult};
 
-const WITHDRAW_DENOMINATION: u64 = 2_000_000;
-const WITHDRAW_FEE: u64 = 1_000;
+/// Shared with `phases::withdraw_round`, which needs the same values to build
+/// `deposit`/`commit_intent` instructions against this pool.
+///
+/// `WITHDRAW_FEE` must clear the real network's rent-exempt minimum for a
+/// brand-new 0-byte System account (~890_880 lamports on this validator,
+/// confirmed via `solana rent 0`): `execute_round` pays the relayer `fee`
+/// lamports directly into a fresh keypair, and a live bank enforces every
+/// touched account end at 0 or above rent-exemption — unlike LiteSVM, which
+/// lets `crates/sdk/tests/e2e.rs`'s much smaller `FEE = 1_000` slide. Both
+/// `denomination - fee` (recipient) and `fee` (relayer) clear it here with
+/// margin.
+pub(crate) const WITHDRAW_DENOMINATION: u64 = 4_000_000;
+pub(crate) const WITHDRAW_FEE: u64 = 2_000_000;
 const WITHDRAW_K_FLOOR: u16 = 2;
 const STAKE_K_FLOOR: u16 = 2;
 const STAKE_FEE: u64 = 5_000;

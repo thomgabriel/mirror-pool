@@ -3,6 +3,7 @@
 //! `Report::assertion`) are a real public API, not dead code the bin-only
 //! reachability graph would flag before their callers land.
 
+pub mod assertions;
 pub mod phases;
 pub mod report;
 pub mod rpc;

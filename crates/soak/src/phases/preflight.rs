@@ -54,7 +54,10 @@ fn check_program_executable(ctx: &Ctx) -> SoakResult<()> {
     Ok(())
 }
 
-fn workspace_root() -> SoakResult<PathBuf> {
+/// Two levels below `crates/soak` — shared with `phases::withdraw_round` (and
+/// Task 3's stake round), which need the same `circuits/build/*` paths to
+/// forward to `sdk::MembershipArtifacts`.
+pub(crate) fn workspace_root() -> SoakResult<PathBuf> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
