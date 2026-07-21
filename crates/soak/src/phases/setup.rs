@@ -18,20 +18,24 @@ use crate::rpc::{send_ixs, Ctx, SoakError, SoakResult};
 /// Shared with `phases::withdraw_round`, which needs the same values to build
 /// `deposit`/`commit_intent` instructions against this pool.
 ///
-/// `WITHDRAW_FEE` must clear the real network's rent-exempt minimum for a
+/// Every fee here must clear the real network's rent-exempt minimum for a
 /// brand-new 0-byte System account (~890_880 lamports on this validator,
-/// confirmed via `solana rent 0`): `execute_round` pays the relayer `fee`
-/// lamports directly into a fresh keypair, and a live bank enforces every
-/// touched account end at 0 or above rent-exemption — unlike LiteSVM, which
-/// lets `crates/sdk/tests/e2e.rs`'s much smaller `FEE = 1_000` slide. Both
-/// `denomination - fee` (recipient) and `fee` (relayer) clear it here with
-/// margin. The 50/50 split is a round number chosen for headroom on both
-/// legs, not a ratio the protocol requires.
-pub(crate) const WITHDRAW_DENOMINATION: u64 = 4_000_000;
-pub(crate) const WITHDRAW_FEE: u64 = 2_000_000;
+/// confirmed via `solana rent 0`) — LIVE-BANK-DISCOVERED, not visible under
+/// LiteSVM: `execute_round` pays `fee` lamports directly into a fresh
+/// keypair, and a live bank enforces every touched account end at 0 or above
+/// rent-exemption, unlike LiteSVM, which lets `crates/sdk/tests/e2e.rs`'s much
+/// smaller `FEE = 1_000` slide. `WITHDRAW_FEE = 1_000_000` and
+/// `WITHDRAW_DENOMINATION - WITHDRAW_FEE = 99_000_000` are chosen to clear
+/// that floor on BOTH legs while staying two visibly distinct amount classes
+/// in A3's evidence (99M vs 1M) — a 50/50 split would still clear the floor
+/// but collapses the payout table into one indistinguishable class.
+pub(crate) const WITHDRAW_DENOMINATION: u64 = 100_000_000;
+pub(crate) const WITHDRAW_FEE: u64 = 1_000_000;
 const WITHDRAW_K_FLOOR: u16 = 2;
 const STAKE_K_FLOOR: u16 = 2;
-const STAKE_FEE: u64 = 5_000;
+/// Same live-bank rent-exemption floor as `WITHDRAW_FEE` above — the relayer
+/// leg of a stake round's payout is a fresh System account too.
+pub(crate) const SOAK_STAKE_FEE: u64 = 1_000_000;
 /// Slack above delegated + rent + fee (mirrors
 /// `programs/pool-program/tests/round_support.rs::stake_pool_denomination`).
 const STAKE_HEADROOM: u64 = 1_000_000;
@@ -85,8 +89,10 @@ pub fn run(ctx: &Ctx) -> SoakResult<SetupOut> {
                 "setup: get_minimum_balance_for_rent_exemption(STAKE_ACCOUNT_SIZE): {e}"
             ))
         })?;
-    let stake_denomination =
-        pool_program::invariants::MIN_STAKE_DELEGATION + stake_rent + STAKE_FEE + STAKE_HEADROOM;
+    let stake_denomination = pool_program::invariants::MIN_STAKE_DELEGATION
+        + stake_rent
+        + SOAK_STAKE_FEE
+        + STAKE_HEADROOM;
 
     let stake_mint = Keypair::new().pubkey();
     let (stake_pool, _) =
@@ -103,7 +109,7 @@ pub fn run(ctx: &Ctx) -> SoakResult<SetupOut> {
         STAKE_K_FLOOR,
         1,
         vote_account,
-        STAKE_FEE,
+        SOAK_STAKE_FEE,
     );
     send_ixs(
         ctx,

@@ -10,9 +10,10 @@ use solana_sdk::{native_token::LAMPORTS_PER_SOL, signature::Signature, signature
 
 use crate::rpc::{Ctx, SoakError, SoakResult};
 
-/// ~11-12 SOL of protocol spend (10 stake deposits at ~1.003 SOL dominate) —
-/// 13 SOL leaves headroom for fees.
-const MIN_OPERATOR_LAMPORTS: u64 = 13 * LAMPORTS_PER_SOL;
+/// ~11.7 SOL of protocol spend (17 withdraw deposits at 0.1 SOL = 1.7 SOL +
+/// 10 stake deposits at ~1.004 SOL = ~10.04 SOL) plus rents (vote account,
+/// ALT creation) and per-tx fees — 15 SOL leaves comfortable headroom.
+const MIN_OPERATOR_LAMPORTS: u64 = 15 * LAMPORTS_PER_SOL;
 const AIRDROP_LAMPORTS: u64 = 2 * LAMPORTS_PER_SOL;
 const MAX_AIRDROPS: u32 = 20;
 

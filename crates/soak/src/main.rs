@@ -119,8 +119,10 @@ fn run(ctx: &Ctx, report_path: &Path) -> SoakResult<()> {
         withdraw_start.elapsed(),
     );
 
+    let stake_start = Instant::now();
+    phases::stake_round::run(ctx, &setup)?;
     ctx.report
-        .note("stake round: not yet implemented (Task 2 scope only — lands in Task 3)");
+        .phase_timing("stake round (k = MAX_K_STAKE)", stake_start.elapsed());
 
     ctx.report
         .finish(report_path)

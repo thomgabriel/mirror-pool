@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use anchor_lang::AccountDeserialize;
 use effective_k::{anonymity_report, FunderId, RoundComposition};
 use solana_client::rpc_config::RpcTransactionConfig;
-use solana_sdk::{account::ReadableAccount, pubkey::Pubkey, signature::Signature};
+use solana_sdk::{
+    account::ReadableAccount, pubkey::Pubkey, signature::Signature, stake::state::StakeStateV2,
+};
 use solana_transaction_status_client_types::{
     EncodedConfirmedTransactionWithStatusMeta, UiLoadedAddresses, UiTransactionEncoding,
 };
@@ -349,6 +351,85 @@ pub fn assert_envelope(
             "resolved_keys = {static_count} static + {loaded_count} loaded = {resolved} (<=64); \
              compute_units_consumed = {cu}"
         ),
+    );
+    Ok(())
+}
+
+/// A8 — stake-only: each stake account's FINAL on-chain state after the same
+/// transaction that `Initialize`d it vault-side and then handed it over —
+/// never the `Initialize` step's parameters. `pairs` is `(stake_account_pda,
+/// recipient)` per intent. Asserts: Stake-program-owned; deserializes as
+/// `StakeStateV2::Stake`; `meta.authorized.{staker,withdrawer} == recipient`
+/// (the `Authorize(Staker)` handover landed); `stake.delegation.voter_pubkey
+/// == vote_account`. Activation (an epoch process) is deliberately NOT
+/// asserted — this checks delegation state only.
+pub fn assert_stake_final_state(
+    ctx: &Ctx,
+    pairs: &[(Pubkey, Pubkey)],
+    vote_account: Pubkey,
+) -> SoakResult<()> {
+    let mut failures = Vec::new();
+    for (stake_account, recipient) in pairs {
+        let account = match ctx.client.get_account(stake_account) {
+            Ok(a) => a,
+            Err(e) => {
+                failures.push(format!("{stake_account}: get_account failed: {e}"));
+                continue;
+            }
+        };
+        if account.owner != solana_sdk::stake::program::ID {
+            failures.push(format!(
+                "{stake_account}: owned by {} (want {})",
+                account.owner,
+                solana_sdk::stake::program::ID
+            ));
+            continue;
+        }
+        match bincode::deserialize::<StakeStateV2>(&account.data) {
+            Ok(StakeStateV2::Stake(meta, stake, _)) => {
+                if meta.authorized.staker != *recipient {
+                    failures.push(format!(
+                        "{stake_account}: staker = {} (want recipient {recipient})",
+                        meta.authorized.staker
+                    ));
+                }
+                if meta.authorized.withdrawer != *recipient {
+                    failures.push(format!(
+                        "{stake_account}: withdrawer = {} (want recipient {recipient})",
+                        meta.authorized.withdrawer
+                    ));
+                }
+                if stake.delegation.voter_pubkey != vote_account {
+                    failures.push(format!(
+                        "{stake_account}: delegated to {} (want {vote_account})",
+                        stake.delegation.voter_pubkey
+                    ));
+                }
+            }
+            Ok(other) => failures.push(format!(
+                "{stake_account}: expected StakeStateV2::Stake, got {other:?}"
+            )),
+            Err(e) => failures.push(format!("{stake_account}: bincode deserialize failed: {e}")),
+        }
+    }
+    let pass = failures.is_empty();
+    let evidence = if pass {
+        format!(
+            "{} stake accounts checked: all Stake-program-owned, authorized.staker == \
+             authorized.withdrawer == recipient (Authorize(Staker) handover landed), \
+             delegation.voter_pubkey == vote_account {vote_account} (delegation state only, \
+             activation not asserted)",
+            pairs.len()
+        )
+    } else {
+        format!("{} mismatches: {}", failures.len(), failures.join("; "))
+    };
+    ctx.report.assertion(
+        "A8",
+        "each stake account's FINAL state (not Initialize's params): Stake-program-owned, \
+         authorized staker/withdrawer handed to recipient, delegated to the pool's validator",
+        pass,
+        evidence,
     );
     Ok(())
 }
