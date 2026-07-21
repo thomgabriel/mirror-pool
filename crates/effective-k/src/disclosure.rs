@@ -113,6 +113,11 @@ pub fn simulate_disclosure(
     seed: u64,
 ) -> Result<DisclosureRun, DisclosureError> {
     validate(p)?;
+    if p.m == p.n {
+        // m==n leaves no background destinations (bg_len==0) to compute μ/σ from — the
+        // l-sigma criterion is unevaluable, not merely pessimistic.
+        return Err(DisclosureError::PreconditionUnknownableParam);
+    }
     let (m, n, b) = (p.m as usize, p.n as usize, p.b as usize);
     let mut rng = SplitMix64::new(seed);
     let mut counts = vec![0u64; n];
@@ -296,6 +301,17 @@ mod disclosure_tests {
             (r.shannon_effective_k - 20.0).abs() < 1e-9,
             "2^H = 20.0 exact; Shannon looks 10x healthier"
         );
+    }
+
+    #[test]
+    fn simulate_disclosure_rejects_m_equal_n() {
+        let p = DisclosureParams {
+            m: 5,
+            n: 5,
+            b: 11,
+            l: 2.0,
+        };
+        assert!(simulate_disclosure(&p, 500, 42).is_err());
     }
 
     #[test]
