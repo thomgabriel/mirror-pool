@@ -40,9 +40,13 @@ pub fn fetch_tx(
         .map_err(|e| SoakError::new(format!("fetch execute tx {sig}: {e}")))
 }
 
-/// A1 — the headline: the execute transaction's on-chain signer set is
-/// exactly `expected_signers` (the operator/cranker) and contains none of
-/// `forbidden` (every recipient/relayer/depositor role).
+/// A1 — the headline joint uniform-actor property: the execute transaction's
+/// on-chain signer set is exactly `expected_signers` (the operator/cranker)
+/// and contains none of `forbidden` (every recipient/relayer/depositor role),
+/// AND every `forbidden` key actually resolved into the transaction via the
+/// ALT (present in `loaded_addresses`, not just absent from the signer
+/// header) — round-kind-generic, so the stake round threads its own
+/// recipient/relayer keys through the same check.
 pub fn assert_signer_set(
     ctx: &Ctx,
     tx: &EncodedConfirmedTransactionWithStatusMeta,
@@ -70,14 +74,39 @@ pub fn assert_signer_set(
     let matches_expected = signers.len() == expected_signers.len()
         && signers.iter().all(|s| expected_signers.contains(s));
     let no_forbidden = !signers.iter().any(|s| forbidden.contains(s));
-    let pass = matches_expected && no_forbidden;
+
+    let meta = tx
+        .transaction
+        .meta
+        .as_ref()
+        .ok_or_else(|| SoakError::new(format!("A1: tx {sig} missing meta")))?;
+    let loaded: Option<UiLoadedAddresses> = meta.loaded_addresses.clone().into();
+    let loaded_keys: Vec<Pubkey> = loaded
+        .as_ref()
+        .map(|l| {
+            l.writable
+                .iter()
+                .chain(l.readonly.iter())
+                .filter_map(|s| s.parse::<Pubkey>().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let forbidden_present = forbidden.iter().filter(|k| loaded_keys.contains(k)).count();
+    let all_forbidden_present = forbidden_present == forbidden.len();
+
+    let pass = matches_expected && no_forbidden && all_forbidden_present;
 
     ctx.report.assertion(
         "A1",
         "execute_round's on-chain signer set is exactly the operator/cranker — no recipient, \
-         relayer, or depositor signs",
+         relayer, or depositor signs — and every forbidden key resolved into the transaction via \
+         ALT (the joint uniform-actor property)",
         pass,
-        format!("signers = {signers:?}"),
+        format!(
+            "signers = {signers:?}; sole signer + {forbidden_present}/{} forbidden keys \
+             present-but-unsigned via loaded_addresses",
+            forbidden.len()
+        ),
     );
     Ok(())
 }
@@ -109,15 +138,24 @@ pub fn assert_vault_delta(
 }
 
 /// A3 — byte-uniform settlement: every `(account, expected_balance)` pair
-/// matches exactly (fresh keys, so absolute balance == the credit).
+/// matches exactly (fresh keys, so absolute balance == the credit). `pairs`
+/// is built as alternating (recipient, relayer) entries per intent — that
+/// parity is used below only to label the evidence, not to change the
+/// per-pair check.
 pub fn assert_uniform_payouts(ctx: &Ctx, pairs: &[(Pubkey, u64)]) -> SoakResult<()> {
     let mut mismatches = Vec::new();
-    let mut groups: BTreeMap<u64, u32> = BTreeMap::new();
-    for (key, expected) in pairs {
+    let mut recipient_groups: BTreeMap<u64, u32> = BTreeMap::new();
+    let mut relayer_groups: BTreeMap<u64, u32> = BTreeMap::new();
+    for (i, (key, expected)) in pairs.iter().enumerate() {
         let bal = ctx
             .client
             .get_balance(key)
             .map_err(|e| SoakError::new(format!("A3: get_balance({key}): {e}")))?;
+        let groups = if i % 2 == 0 {
+            &mut recipient_groups
+        } else {
+            &mut relayer_groups
+        };
         *groups.entry(*expected).or_insert(0) += 1;
         if bal != *expected {
             mismatches.push(format!("{key}: got {bal}, want {expected}"));
@@ -125,14 +163,18 @@ pub fn assert_uniform_payouts(ctx: &Ctx, pairs: &[(Pubkey, u64)]) -> SoakResult<
     }
     let pass = mismatches.is_empty();
     let evidence = if pass {
-        let summary: Vec<String> = groups
-            .iter()
-            .map(|(amount, n)| format!("{n}x {amount} lamports"))
-            .collect();
+        let fmt_group = |groups: &BTreeMap<u64, u32>| -> String {
+            groups
+                .iter()
+                .map(|(amount, n)| format!("{n}x {amount} lamports"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         format!(
-            "{} accounts checked, all match: {}",
+            "{} accounts checked, all match: recipients: {}; relayers: {}",
             pairs.len(),
-            summary.join(", ")
+            fmt_group(&recipient_groups),
+            fmt_group(&relayer_groups),
         )
     } else {
         format!("{} mismatches: {}", mismatches.len(), mismatches.join("; "))

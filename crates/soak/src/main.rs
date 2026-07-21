@@ -71,7 +71,14 @@ fn main() -> ExitCode {
     };
 
     match run(&ctx, &args.report_path) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            if ctx.report.all_passed() {
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("soak: assertion failure(s) — see report");
+                ExitCode::FAILURE
+            }
+        }
         Err(e) => {
             ctx.report.mark_failed(e.to_string());
             if let Err(write_err) = ctx.report.finish(&args.report_path) {

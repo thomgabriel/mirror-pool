@@ -25,7 +25,8 @@ use crate::rpc::{send_ixs, Ctx, SoakError, SoakResult};
 /// touched account end at 0 or above rent-exemption — unlike LiteSVM, which
 /// lets `crates/sdk/tests/e2e.rs`'s much smaller `FEE = 1_000` slide. Both
 /// `denomination - fee` (recipient) and `fee` (relayer) clear it here with
-/// margin.
+/// margin. The 50/50 split is a round number chosen for headroom on both
+/// legs, not a ratio the protocol requires.
 pub(crate) const WITHDRAW_DENOMINATION: u64 = 4_000_000;
 pub(crate) const WITHDRAW_FEE: u64 = 2_000_000;
 const WITHDRAW_K_FLOOR: u16 = 2;

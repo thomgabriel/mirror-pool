@@ -85,6 +85,15 @@ impl Report {
         self.inner.borrow_mut().failed = Some(reason);
     }
 
+    /// True iff no phase called `mark_failed` and every recorded assertion
+    /// passed — the fail-closed gate `main` must consult before returning
+    /// `ExitCode::SUCCESS`; a `run()` that returns `Ok(())` says nothing on
+    /// its own about whether an assertion inside it failed.
+    pub fn all_passed(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner.failed.is_none() && inner.assertions.iter().all(|a| a.pass)
+    }
+
     pub fn finish(&self, path: &Path) -> std::io::Result<()> {
         let inner = self.inner.borrow();
         let mut out = String::new();
