@@ -8,6 +8,12 @@
 
 use std::collections::HashMap;
 
+pub mod disclosure;
+pub use disclosure::{
+    converge_report, precondition_holds, rounds_to_converge, simulate_disclosure, ConvergeReport,
+    DisclosureError, DisclosureParams, DisclosureRun, SplitMix64,
+};
+
 /// An opaque clustered-funder label — an equality/hash key only; the metric never
 /// interprets the bytes. A real caller maps its off-chain clustering to a representative
 /// id (e.g. a Solana `Pubkey` via `.to_bytes()`). Kept a plain `[u8; 32]` so this crate
