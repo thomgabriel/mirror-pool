@@ -1,9 +1,11 @@
 # §6.5 Adversarial simulation — the empirical "it actually hides" proof (F2b)
 
 **Date:** 2026-07-21 · **Status:** approved design, pending fork spec-review
-**Grounding:** `docs/research/anonymity-frontier-and-antisybil.md` §1 (the three metrics +
-the Tóth–Hornák–Vajda / Li et al. proofs that Shannon and nominal-k miss whale self-fill),
-§2 (Danezis 2003 statistical-disclosure closed form), the roadmap's F2b guard
+**Grounding:** `docs/research/anonymity-frontier-and-antisybil.md` §1 (the three metrics — with
+Smith 2009 FoSSaCS as the min-entropy definitional anchor, §6.1 — plus the Tóth–Hornák–Vajda /
+Li et al. proofs that Shannon and nominal-k miss whale self-fill), §2 (Danezis 2003
+statistical-disclosure closed form) and §2.3 (empirical public-chain clustering — grounds the
+assumed adversary capability), the roadmap's F2b guard
 (`docs/superpowers/plans/2026-07-18-finish-roadmap.md`); builds on `crates/effective-k`.
 **Branch:** `feat/adversarial-sim` off `main` (`b34f515`, post-SOAK).
 
@@ -27,12 +29,13 @@ compositions and participation traces, reducing to the verified closed forms in 
 
 Given the research's own definitions (`§1.1`, `§2.1`), the harness computes and reports:
 
-### R1 — Distinct funders (the mechanism working)
+### R1 — Distinct funders (the mechanism working — the baseline, shown AFTER the degradation)
 `k` notes, `k` distinct singleton funders. Feed the composition to
-`effective_k::anonymity_report`; assert `effective_k ≈ k`, `guessing_advantage ≈ 0`,
-`max_funder_share = 1/k`. This is the *baseline that must hold* — if R1 doesn't show near-nominal
-anonymity, the metric is broken. (It won't be — Task-6b tests already pin `m=1 ⇒ k_∞=k`; here it's
-the top of the contrast.)
+`effective_k::anonymity_report`; assert `effective_k == k` (exact, not approximate — the crate's
+`no_whale_gives_nominal_k` test pins `== k`), `guessing_advantage == 0`, `max_funder_share =
+1/k`. This is the *baseline that must hold* — if R1 doesn't show nominal anonymity, the metric is
+broken. It is the bottom of the doc's contrast, not the top (F5): the reader meets R2/R3
+degradation first.
 
 ### R2 — Whale self-fill (the composition residual, disclosed)
 One funder owns `m` of the `k` notes, sweeping `m = 1 … k`. For each `m`, report the measured
@@ -46,38 +49,69 @@ statement that a fully self-filled round has zero behavioral anonymity, computed
 A repeat participant ("Alice") directs value to a fixed set of `m` destinations from a universe
 `N`, across rounds of size `b`. Implement Danezis 2003's closed form (research §2.1, eqs. 1–6):
 - the precondition `m < N/(b−1)` (report whether the attack even applies),
-- `t*`, the rounds-to-converge at confidence `l` (eq. 6),
-- and a **direct simulation** that generates `t` synthetic rounds (Alice's `m` real destinations
-  mixed with `b−1` background draws from `N`), runs the linear estimator `v ≈ b·Ō − (b−1)·u`, and
-  reports the empirical rounds-to-identify vs. the closed-form `t*` (they should agree — that
-  agreement is the harness validating its own model against the literature).
-Report the two structural facts the research derives: variable round size `b ≥ k` is a *pool-mix*
-favorable property (harder than fixed-b), and the **stake action's small `N` makes it the more
-exposed action type** under `m < N/(b−1)` — a formula-derived, disclosed per-action asymmetry.
+- `t*`, the rounds-to-converge at confidence `l` (eq. 6), **reported only in the `m ≥ 2` regime**
+  where it is a meaningful round count. **For `m = 1` (and any `t* < 1`), report "precondition
+  holds ⇒ the attack applies from the first rounds" rather than a fractional-round `t*`** — a
+  sub-1-round number is not an observable round count and would overstate attack ease (spec-review
+  F2). The quantitative decay *curve* therefore lives in `m ≥ 2`; say so in the output.
+- and a **seeded cross-check simulation** — NOT independent literature validation, but a
+  self-consistency check that the *coded* estimator recovers Alice's set at the confidence the
+  *coded* `t*` predicts (spec-review F3): generate `t` synthetic rounds (Alice's `m` real
+  destinations + `b−1` background draws from `N`), run the linear estimator `v ≈ b·Ō − (b−1)·u`,
+  and declare "identified" by the **same `l`-sigma separation criterion `t*` is derived from**
+  (each real destination's estimate exceeds background by `l` standard deviations) — not a
+  different top-m test, or the two systematically diverge. Because one seed's rounds-to-identify
+  is a high-variance random variable, agreement is asserted **over a distribution of seeds** (the
+  success rate at `t*` rounds ≈ the `l`-confidence, or mean rounds-to-identify over N seeds ≈ `t*`
+  within a stated band), never as a single-seed "≈ t*".
+Report the structural facts the research derives: variable round size `b ≥ k` is a *pool-mix*
+favorable property (harder than fixed-b). And the **per-action asymmetry — stake is the more
+exposed action type — is driven by the precondition regime + a plausibly small target set
+(`m ≈ 1`, from the ~1-epoch stake-deactivation cooldown discouraging rotation) + a small
+destination universe `N` (validators receiving pool delegations, hundreds not millions), NOT by
+`t*` magnitude** (spec-review F1). `t*` is *decreasing* in `N`, so ranking action exposure by
+`t*` would give the opposite, wrong headline — the harness must NOT rank exposure by `t*`. The
+honest asymmetry is: for stake, `m < N/(b−1)` is satisfiable with a plausibly-tiny `m` against a
+small `N`, so the attack both *applies* and targets a small set; for withdraw, large `N` makes
+the precondition harder to satisfy and the target set diffuse.
 
 ## 3. Output — the proof artifact
 
 A committed `docs/ADVERSARIAL-SIM.md` (hand-framed, like SOAK.md) embedding a captured run, plus
-the harness's structured report. Structure:
-1. *What this measures* — the three regimes, each mapped to its research-doc section + verified
-   citation.
-2. *The R1→R2 contrast table* — effective-k, guessing-advantage, max-funder-share across the
-   whale sweep; the number that collapses is shown, not buried.
-3. *The R3 decay* — `t*` vs. empirical rounds-to-identify, the precondition, the per-action `N`
-   asymmetry (withdraw large-N vs. stake small-N).
-4. *What this does NOT establish* — at equal prominence: it's a model over synthetic compositions
-   (real funder-clustering is an *input* the harness assumes, not something it proves the adversary
-   can achieve); the closed forms carry their own assumptions (global passive observer, stable
-   behavior); this measures the residuals the design already discloses, it does not add a mechanism
-   that removes them.
+the harness's structured report. **The structured report (not just the prose) must surface the R3
+decay result as a first-class field mirroring R2's collapse field** (spec-review F5 — equal
+prominence is unenforceable in hand-written prose alone; the machine report is what makes it
+real). Doc structure, degradation-first (F5):
+1. *The degradation headlines, up front* — the R2 whale-collapse curve AND the R3 decay result
+   lead the document, before the R1 baseline. A reader sees where the mechanism fails before where
+   it works.
+2. *The whale-sweep contrast table (R2 → R1)* — effective-k, guessing-advantage, max-funder-share
+   across `m = k … 1`, i.e. **worst case first**; the collapsing number is the first column a
+   reader meets, not a footnote.
+3. *The R3 decay* — the precondition `m<N/(b−1)`, `t*` (m≥2 regime; "applies immediately" for
+   m=1), the seeded cross-check's seed-distribution agreement, and the per-action asymmetry framed
+   per R2 above (precondition + m≈1 + small N — NOT a `t*` ranking).
+4. *What this measures, and what it does NOT establish* — at equal prominence: it's a model over
+   synthetic compositions; **real funder-clustering is an assumed adversary *capability*, an input
+   to the harness — grounded, not fantastical: public-chain clustering is empirically demonstrated
+   (research §2.3, Béres/Tang/Tutela/Wang), so the assumption is assumed-because-demonstrated-
+   elsewhere, not assumed-because-convenient** (spec-review F4). But the harness neither proves a
+   *given* real deposit graph IS clusterable (no "your pool is broken" overclaim) NOR that it is
+   NOT (no "synthetic, so real pools are safe" dismissal). The closed forms carry their own
+   assumptions (global passive observer, stable behavior). This measures residuals the design
+   already discloses; it adds no mechanism that removes them.
 
 ## 4. Honesty ledger
 
 - **Adversarial against ourselves** is the whole point (roadmap guard): R2 and R3 are the regimes
   where mirror-pool degrades; they get top billing, not a footnote.
-- Every reported number reduces to a **verified** closed form in the research doc — `k_∞ = k/m`
-  (Cachin/DRS), the Danezis `t*` (SEC 2003 eqs). No fabricated numbers; the simulation's job is to
-  *reproduce* the closed form empirically, and any divergence is a finding, not smoothed over.
+- Every reported number reduces to a **verified** closed form in the research doc: the min-entropy
+  *definition* `k_∞ = 2^{H_∞} = 1/maxᵢpᵢ` is Cachin 1997 / Dodis–Reyzin–Smith 2007 / Smith 2009
+  (FoSSaCS — the definitional anchor per research §6.1), but the **`k_∞ = k/m` whale
+  specialization is derived-by-us, not a cited theorem** — keep that label, don't launder it into
+  Cachin/DRS (spec-review F6). The Danezis `t*` is SEC 2003 eqs 1–6. No fabricated numbers; the
+  seeded simulation *cross-checks the coded estimator against the coded `t*`* (a self-consistency
+  check, not literature validation), and any divergence is a finding, not smoothed over.
 - The `2^H`/`k_∞`/`Adv` naming keeps its **derived-by-us, not literature-named** labels (research
   §1.2) wherever it appears in the doc.
 - No overclaim: the harness measures the anonymity of a *given* composition; it does not claim to
@@ -104,11 +138,18 @@ the harness's structured report. Structure:
 - Determinism without `Math.random`: a small seeded PRNG (e.g. a `SplitMix64`/`xorshift` in-crate,
   no dep — the crate is dep-free today and should stay so; proptest is already a dev-dep for tests).
 - Tests (TDD, the crate's existing discipline): unit tests pinning the closed forms against the
-  research doc's worked numbers (the Tóth–Hornák–Vajda D1/D2 example — S=4.3219 bits, Θ=0.5 — is a
-  ready-made oracle for the min-entropy-vs-Shannon divergence; Danezis eq. 6 against a hand-computed
-  `(m,N,b,l)` case); a proptest that the whale sweep is monotone-collapsing; a proptest that the
-  simulation's empirical convergence tracks `t*` within a tolerance. The harness binary/example
-  produces the captured report.
+  research doc's worked numbers. The Tóth–Hornák–Vajda D1/D2 example is a **ready-made, verified
+  oracle** for the min-entropy-vs-Shannon divergence — spec-review confirmed D2 is representable as
+  `k=200, whale=100, +100 singletons` → `effective_k=2, max_share=0.5, shannon_bits=4.3219`, which
+  the crate's integer-count posteriors reproduce exactly. Also: Danezis eq. 6 against a
+  hand-computed `(m,N,b,l)` case; a proptest that the whale sweep is monotone-collapsing (the crate
+  already has `concentration_never_raises_effective_k`). The R3 simulation's agreement test asserts
+  over a **seed distribution** (success-rate-at-`t*` ≈ `l`-confidence, or mean-rounds ≈ `t*` within
+  a band), NOT a single-seed point equality (F3) — and is framed as a coded-estimator-vs-coded-`t*`
+  self-consistency check (F7: this is the simulation's only non-circular value; the closed form +
+  the hand-computed oracle carry the honest R3 message on their own, so the simulation earns its
+  place solely as that bug-catching cross-check). The harness binary/example produces the captured
+  report.
 - Likely 2 plan tasks: (1) the `disclosure` module (Danezis closed form + seeded simulation) +
   its unit/property tests; (2) the regime harness (R1/R2/R3 wired to a report) +
   `docs/ADVERSARIAL-SIM.md` + the captured run. R1/R2 need no new metric code — they're the
