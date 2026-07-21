@@ -153,8 +153,27 @@ mod disclosure_tests {
         assert!(rounds_to_converge(&DisclosureParams { m: 5, n: 400, b: 1, l: 2.0 }).is_err()); // b-1=0
         assert!(precondition_holds(&DisclosureParams { m: 500, n: 400, b: 11, l: 2.0 }).is_err()); // m>n
     }
+
+    // The Tóth–Hornák–Vajda D2 oracle — the min-entropy-vs-Shannon divergence made executable
+    // (plan-gate required test; spec §6). Uses effective_k's own API, not the disclosure module.
+    #[test]
+    fn thv_d2_oracle_minentropy_vs_shannon() {
+        use crate::{anonymity_report, FunderId, RoundComposition};
+        fn f(x: u8) -> FunderId { FunderId([x; 32]) }
+        // D2: k=200 = one whale with 100 notes (funder 0) + 100 distinct singletons (funders 1..=100).
+        // H = 0.5 + 0.5·log2(200) = 4.32193 bits ⇒ shannon_effective_k = 2^H = √(2·200) = 20.0 EXACT,
+        // while min-entropy effective_k = 200/100 = 2.0 — the 10× gap Shannon hides.
+        let mut funders = vec![f(0); 100];
+        funders.extend((1..=100u8).map(f));
+        let r = anonymity_report(&RoundComposition::new(funders).unwrap());
+        assert_eq!(r.effective_k, 2.0, "min-entropy effective_k = k/m = 200/100");
+        assert_eq!(r.max_funder_share, 0.5, "whale holds half the mass");
+        assert!((r.shannon_effective_k - 20.0).abs() < 1e-9, "2^H = 20.0 exact; Shannon looks 10x healthier");
+    }
 }
 ```
+(If `FunderId`'s field or `RoundComposition::new` differ from this shape, adapt to the real API in
+`lib.rs` — the assertion *values* (2.0 / 0.5 / 20.0) are the oracle and are non-negotiable.)
 Run: `cargo test -p effective-k disclosure_tests` → Expected: FAIL (functions undefined).
 
 - [ ] **Step 4: Implement precondition + t* + converge_report**
@@ -193,8 +212,13 @@ background by `l` sigma (the SAME criterion `t*` encodes), or `max_rounds` is hi
 - Model: each round, Alice sends to one of her `m` real destinations (uniform); the other `b−1`
   slots are background draws uniform over the `N` universe. Accumulate per-destination observation
   counts; the estimator is `v̂ = b·Ō − (b−1)·û` per Danezis eq. 1–2 (Ō = observed rate with Alice,
-  û = background rate). "Identified" when every real destination's `v̂` exceeds the background mean
-  by ≥ `l` standard deviations of the background estimate.
+  û = background rate).
+- **"Identified" criterion, pinned concretely (plan-gate — do NOT invent a different spread
+  measure, or the shared-criterion guarantee silently breaks):** compute the mean `μ` and the
+  empirical standard deviation `σ` of `v̂` over the **non-Alice (background) destinations only**;
+  the round is "identified" iff **every** one of Alice's `m` real destinations has `v̂ ≥ μ + l·σ`.
+  This is the same `l`-sigma separation `t*` (eq. 6) is derived from — that shared definition is
+  the whole point of the cross-check.
 - Return `DisclosureRun { identified, rounds_used, estimate_hits }`.
 - Determinism: all randomness via one `SplitMix64::new(seed)` — same seed ⇒ identical run.
 
@@ -265,10 +289,12 @@ Regimes, in the spec's degradation-first order:
   singleton funders, call `anonymity_report`, and emit a row: `m`, `effective_k`,
   `guessing_advantage`, `max_funder_share`. First column a reader meets = the collapse
   (`m=k ⇒ effective_k=1.0`).
-- **R3 decay:** for the two action profiles — withdraw `(N large, e.g. 100_000)` and stake
-  `(N small, e.g. 200)` at `b = 17` — print `precondition_holds`, `converge_report` (m=1 ⇒
-  "applies immediately"; also show an `m=3` row so the quantitative curve appears), and the
+- **R3 decay:** for the two action profiles, **each at its OWN measured round envelope** (plan-gate
+  correction — `b` is per-action): withdraw `(N large, e.g. 100_000, b = MAX_K_WITHDRAW = 17)` and
+  stake `(N small, e.g. 200, b = MAX_K_STAKE = 10)`. Print `precondition_holds`, `converge_report`
+  (m=1 ⇒ "applies immediately"; also show an `m=3` row so the quantitative curve appears), and the
   seeded simulation's seed-distribution summary (success rate + mean rounds over ~200 seeds).
+  (Stake precondition at m=1: `1 < 200/9 ≈ 22` — holds.)
   Frame the asymmetry as **forced (stake) vs permitted (withdraw)** per spec §2 R3 — do NOT rank
   by `t*`, do NOT claim large-N shields the precondition.
 - **R1 baseline (last):** `k=17` distinct singletons → assert `effective_k == 17`,
