@@ -140,7 +140,7 @@ Shipped and merged (each built spec → plan → TDD, independently review-gated
 | Plan 6a | Timeout-gated `cancel_intent` |
 | Pool.fee | One mandatory pool-wide fee — closes a withdraw-pool amount fingerprint + nominal anti-Sybil tax |
 | Plan 6b | `crates/effective-k` — the min-entropy effective-k measurement core |
-| F1 · MAX_K | Fail-closed per-round intent cap, **pinned by live measurement** (withdraw 17 / stake 10) — a round can never grow past what one `execute_round` transaction can settle |
+| F1 · MAX_K | Fail-closed per-round intent cap, **pinned by measurement** (withdraw 17 / stake 10; the stake ceiling is the in-VM heap wall), corroborated live by the SOAK — a round can never grow past what one `execute_round` transaction can settle |
 | Structure-polish | Behavior-identical hygiene: `errors.rs`, one-file-per-instruction `instructions/`, SDK `note`/`tree`/`ix` split, and the `withdraw → membership` circuit rename (the circuit proves membership for *every* action) |
 | F2a · **SOAK** | A live end-to-end run against `solana-test-validator` with a reproducible proof doc — **[`docs/SOAK.md`](docs/SOAK.md)**: a k=17 withdraw round + a real native-stake round, the uniform-actor property read off the wire (cranker is the *sole* signer; every recipient/relayer key present-but-unsigned via ALT) |
 | F2b · **Adversarial sim** | The empirical "how well it hides" companion — **[`docs/ADVERSARIAL-SIM.md`](docs/ADVERSARIAL-SIM.md)**: the whale-self-fill effective-k collapse and the cross-round statistical-disclosure decay, measured against verified closed forms, **adversarial against ourselves** (the degradation regimes lead) |
