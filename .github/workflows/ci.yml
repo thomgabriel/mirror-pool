@@ -65,8 +65,10 @@ jobs:
   # ---------- 2b. Coverage of the host-measurable invariant layer ----------
   # The SCOPE is the whole point (cicd-and-testing.md §3): llvm-cov instruments the HOST
   # build, but LiteSVM runs the program as an SBF ELF inside the SBF VM, which emits no
-  # coverage. So lib.rs/verifier.rs/round.rs/state.rs report ~0% here despite being well
-  # covered by the LiteSVM suites — a whole-crate number reads ~50% and is simply a lie.
+  # coverage. So lib.rs/instructions/*/verifier.rs/round.rs/state.rs report ~0% here despite
+  # being well covered by the LiteSVM suites — a whole-crate number reads ~50% and is simply
+  # a lie. (instructions/ is the handler layer the structure-polish pass moved out of lib.rs;
+  # same in-VM-only rationale, so it joins the exclusion.)
   # We therefore gate only the pure `pub fn` layer llvm-cov measures truthfully: Poseidon,
   # Merkle, the root ring, the k-floor/value-conservation invariants, and ext_data_hash —
   # exactly the security-critical code CLAUDE.md says to factor out for this reason.
@@ -89,7 +91,7 @@ jobs:
       - name: Coverage of pure invariant fns (scoped — see comment above)
         run: |
           cargo llvm-cov --summary-only -p pool-program -p ext-data --lib --locked \
-            --ignore-filename-regex 'pool-program/src/(lib|action|verifier|round|state|nullifier)\.rs$' \
+            --ignore-filename-regex 'pool-program/src/((lib|action|verifier|round|state|nullifier)\.rs$|instructions/)' \
             --fail-under-lines 90
 
   # ---------- 3. SBF build + non-proof LiteSVM integration tests ----------
