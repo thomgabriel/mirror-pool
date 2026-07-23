@@ -130,7 +130,7 @@ Where the guarantee stops:
 
 ## Status
 
-Local-only (`main` is ahead of `origin`, not yet pushed). Shipped and merged:
+Shipped and merged (each built spec → plan → TDD, independently review-gated):
 
 | Phase | What |
 |---|---|
@@ -140,7 +140,40 @@ Local-only (`main` is ahead of `origin`, not yet pushed). Shipped and merged:
 | Plan 6a | Timeout-gated `cancel_intent` |
 | Pool.fee | One mandatory pool-wide fee — closes a withdraw-pool amount fingerprint + nominal anti-Sybil tax |
 | Plan 6b | `crates/effective-k` — the min-entropy effective-k measurement core |
-| Research | Frontier-delta validation — Smith 2009 (QIF) anchored as effective-k's definitional source; the Solana execution-limits (`MAX_K`) envelope; two open mechanism gaps disclosed honestly |
+| F1 · MAX_K | Fail-closed per-round intent cap, **pinned by measurement** (withdraw 17 / stake 10; the stake ceiling is the in-VM heap wall), corroborated live by the SOAK — a round can never grow past what one `execute_round` transaction can settle |
+| Structure-polish | Behavior-identical hygiene: `errors.rs`, one-file-per-instruction `instructions/`, SDK `note`/`tree`/`ix` split, and the `withdraw → membership` circuit rename (the circuit proves membership for *every* action) |
+| F2a · **SOAK** | A live end-to-end run against `solana-test-validator` with a reproducible proof doc — **[`docs/SOAK.md`](docs/SOAK.md)**: a k=17 withdraw round + a real native-stake round, the uniform-actor property read off the wire (cranker is the *sole* signer; every recipient/relayer key present-but-unsigned via ALT) |
+| F2b · **Adversarial sim** | The empirical "how well it hides" companion — **[`docs/ADVERSARIAL-SIM.md`](docs/ADVERSARIAL-SIM.md)**: the whale-self-fill effective-k collapse and the cross-round statistical-disclosure decay, measured against verified closed forms, **adversarial against ourselves** (the degradation regimes lead) |
+| Research | Frontier-delta validation — Smith 2009 (QIF) anchored as effective-k's definitional source; the Solana execution-limits (`MAX_K`) envelope; the one open mechanism gap (the stake create-vs-normalize shape channel) disclosed honestly |
+
+**The two proof docs are the fastest way to see it work:** [`docs/SOAK.md`](docs/SOAK.md) proves the
+mechanism runs live (real transaction signatures a judge can look up); [`docs/ADVERSARIAL-SIM.md`](docs/ADVERSARIAL-SIM.md)
+measures — honestly, worst-case-first — how much anonymity it actually delivers.
+
+## Future work (v1 → production)
+
+These are **deliberate scope decisions, not gaps** — each has a reason it is out of the bounty
+submission, recorded so a reviewer reads them as choices:
+
+- **Bonding / economic anti-Sybil** — *priced, not solved* is the honest posture. Our mechanism
+  research concluded a bond is "a price, not a proof": a well-capitalized adversary is unaffected,
+  and it does not deepen *distinct-human* `k`. Building it would invite the exact economic-Sybil
+  overclaim we avoid. The reserved `["member", pool, C_m]` PDA seam + honest disclosure is stronger.
+- **More `PooledAction` adapters (Swap / LP / Vote)** — architecturally blocked at low `k`, not a
+  free choice: a swap CPI (e.g. Jupiter) blows the 64-account-lock envelope
+  (`docs/research/solana-execution-limits.md` for the envelope; `behavioral-rounds-followup-proposal.md`
+  for the swap-specific account load).
+- **Opt-in viewing-key disclosure** — the prior-art lesson (every survivor bolts on selective
+  disclosure) and a planned distinguisher; user-controlled only, no global auditor or backdoor.
+- **`round_executable_slot` timing slice + a fuzzing pass** — the last mechanism-research item and
+  a robustness sweep of the fail-closed paths; scoped, not yet built.
+- **Production hardening** — Squads multisig upgrade authority, time-locks/caps, an external audit,
+  and a multi-party trusted-setup ceremony (the shipped setup is dev-only, disclosed above). This
+  is mainnet-launch scope; a solo ceremony isn't meaningfully buildable.
+- **Off-chain coordinator / participant CLI + an indexer** — considered, not selected: the SOAK
+  binary already shows "a judge can run it," and `MAX_K` bounds a round to the low tens, so
+  large-scale indexing is moot. If revisited, the coordinator stays *liveness-only* (it can stall,
+  never deanonymize).
 
 Every phase was built via spec → plan → TDD, with an independent review gate on the spec, the
 plan, and the merged branch.
@@ -173,8 +206,10 @@ Lint/supply-chain gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D 
 
 ```
 programs/pool-program/   on-chain Anchor program        → programs/README.md
-crates/                  host-side crates (SDK, prover, tooling, analysis) → crates/README.md
+crates/                  host-side crates (SDK, prover, tooling, effective-k, soak harness) → crates/README.md
 circuits/                circom membership circuit + Groth16 setup → circuits/README.md
+docs/SOAK.md             live end-to-end proof run (reproducible; real tx signatures)
+docs/ADVERSARIAL-SIM.md  empirical anonymity-decay measurement (worst-case-first)
 docs/research/           the research that grounds the design
 docs/superpowers/        specs (designs) and plans (implementation)
 deny.toml                cargo-deny supply-chain policy
