@@ -158,9 +158,11 @@ submission, recorded so a reviewer reads them as choices:
 - **Bonding / economic anti-Sybil** — *priced, not solved* is the honest posture. Our mechanism
   research concluded a bond is "a price, not a proof": a well-capitalized adversary is unaffected,
   and it does not deepen *distinct-human* `k`. Building it would invite the exact economic-Sybil
-  overclaim we avoid. The reserved `["member", pool]` PDA seam + honest disclosure is stronger.
+  overclaim we avoid. The reserved `["member", pool, C_m]` PDA seam + honest disclosure is stronger.
 - **More `PooledAction` adapters (Swap / LP / Vote)** — architecturally blocked at low `k`, not a
-  free choice: a Jupiter swap CPI blows the 64-account-lock envelope (`docs/research/solana-execution-limits.md`).
+  free choice: a swap CPI (e.g. Jupiter) blows the 64-account-lock envelope
+  (`docs/research/solana-execution-limits.md` for the envelope; `behavioral-rounds-followup-proposal.md`
+  for the swap-specific account load).
 - **Opt-in viewing-key disclosure** — the prior-art lesson (every survivor bolts on selective
   disclosure) and a planned distinguisher; user-controlled only, no global auditor or backdoor.
 - **`round_executable_slot` timing slice + a fuzzing pass** — the last mechanism-research item and
